@@ -6,7 +6,7 @@
 - Owner: Implementation agent
 - State: Windows foundation, bounded export and stdio MCP/job checks executed; full application acceptance pending
 
-See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md), [timed-image evidence](evidence/2026-09-19-timed-images.md) and [RC-03 evidence](evidence/2026-09-19-rc03-foundation.md): managed verification passes 37 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. The bounded media/image slice validates complete decoded output; acquisition/caption/STT boundaries are deterministic but live external providers, broader media, interactive image-client, host and speech-quality gates remain pending.
+See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md), [timed-image evidence](evidence/2026-09-19-timed-images.md), [RC-03 foundation evidence](evidence/2026-09-19-rc03-foundation.md) and [RC-03 live evidence](evidence/2026-09-19-rc03-live.md): managed verification passes 37 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. The live Windows acceptance covers YouTube acquisition through Deno and three-chunk local Whisper transcription; broader media, languages, Linux, interactive image-client and semantic quality gates remain pending.
 
 ## First executable slice
 

@@ -14,6 +14,8 @@ dotnet run --project src/RoughCut.Mcp -- --workspace artifacts/mcp-workspace
 
 `ROUGHCUT_WORKSPACE` can supply the root. `ROUGHCUT_FFMPEG` and `ROUGHCUT_FFPROBE` override the external media executables. Standard output is reserved for MCP messages.
 
+Set `ROUGHCUT_STT_MODEL` to the verified base.en model path to enable local transcription. `ROUGHCUT_STT_LANGUAGE` defaults to `en`; `ROUGHCUT_STT_CHUNK_SECONDS` defaults to 30 and must be 5–30. Inference stays local, while the explicit speech CLI `model` command can download and verify the model beforehand.
+
 The current tools are:
 
 | Tool | Behavior |
@@ -26,6 +28,7 @@ The current tools are:
 | `roughcut_apply_edits` | Apply one revision-checked edit batch |
 | `roughcut_import_captions` | Import a bounded project-local SRT |
 | `roughcut_select_captions` | Assess SRT candidates by provenance, language and coverage, then persist a recommendation or explicit override |
+| `roughcut_transcribe_local` | Run bounded local Whisper transcription and persist timed speech, SRT and model/source provenance |
 | `roughcut_import_image` | Validate an incoming base64 PNG and add a content-addressed image asset with provenance |
 | `roughcut_acquire_url` | Run configured standalone yt-dlp for one bounded staged media/subtitle acquisition |
 | `roughcut_preflight_export` | Return exact supported/unsupported export decisions |
@@ -37,4 +40,4 @@ Incoming PNGs are capped at 8 MiB and 8K pixels, require valid chunk checksums, 
 
 Jobs are serialized atomically under `<workspace>/.roughcut/jobs`, retain at most 100 records and run exports one at a time. An interrupted `queued` or `running` checkpoint becomes `failed` when the next host starts; automatic resume is not claimed. Export staging cleanup and atomic bundle publication remain the export engine's responsibility.
 
-The executable protocol checks launch the host with the official MCP client, list all 14 tools, receive and decode source and revision-aware timeline PNG content blocks, assess and persist caption provenance, reject workspace escapes and stale revisions, import and insert a PNG, complete and validate the encoded image export, and cancel a separate durable export without publishing output. URL acquisition is verified through a deterministic fake external tool; no live site was contacted. The stdio host is currently a normal .NET deployment; NativeAOT publication has not been evaluated for the reflection-based MCP tool schema.
+The executable protocol checks launch the host with the official MCP client, list all 15 tools, receive and decode source and revision-aware timeline PNG content blocks, assess and persist caption provenance, reject workspace escapes and stale revisions, verify actionable missing-model behavior for local STT, import and insert a PNG, complete and validate the encoded image export, and cancel a separate durable export without publishing output. Live provider acceptance is recorded separately. The stdio host is a normal .NET deployment because both its reflection-based MCP schema and native Whisper loading have not been qualified for NativeAOT.

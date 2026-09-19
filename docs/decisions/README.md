@@ -8,5 +8,6 @@
 | [0004](0004-stdio-mcp-and-jobs.md) | 2026-09-19 | Accepted for local MVP | Official SDK stdio host, workspace isolation, image content/import and durable export jobs |
 | [0005](0005-timed-image-rendering.md) | 2026-09-19 | Accepted for bounded local MVP | Revision-aware timed PNG preview and validated lossless image/silence rendering |
 | [0006](0006-acquisition-caption-speech-boundary.md) | 2026-09-19 | Deterministic foundation accepted | Bounded yt-dlp staging, caption evidence/override and provider-neutral timed local-STT chunks |
+| [0007](0007-live-acquisition-and-whisper.md) | 2026-09-19 | Accepted for bounded Windows MVP | Explicit Deno acquisition and pinned timed Whisper.net base.en provider |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.
