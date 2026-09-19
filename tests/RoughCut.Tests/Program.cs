@@ -253,6 +253,12 @@ await Check("Speaker corrections and voice previews are revisioned and reversibl
         new(new("voice-2", "speaker-2", "qwen-tts", "aiden", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "English"),
             new("replace-1", "speech-1", "voice-2", "Replacement text")));
     Assert(planned.Replacements.Single().State == "requested", "Voice request was not planned.");
+    var repeated = VoicePlanner.Plan(planned with
+    {
+        Speech = [.. planned.Speech, new("speech-2", "video", 2000, 2500, "Another line", ["speaker-2"], "corrected")]
+    }, new(planned.Voices.Single(), new("replace-2", "speech-2", "voice-2", "Another replacement", "time-stretch")));
+    Assert(repeated.Voices.Length == 1 && repeated.Replacements.Length == 2,
+        "A reviewed speaker voice mapping could not be reused for another interval.");
     var imported = await operations.ImportVoicePreviewAsync(Path.GetFileName(path), 3, "replace-1",
         Convert.ToBase64String(TestAudio.PcmWave()), "fixture-qwen-runtime");
     Assert(imported.Replacements.Single().State == "preview" && imported.Synthesis.Single().RequestedDuration == 1000 &&
@@ -266,9 +272,24 @@ await Check("Speaker corrections and voice previews are revisioned and reversibl
     var mismatched = reverted with
     {
         Replacements = [reverted.Replacements.Single() with { State = "preview" }],
+        Assets = reverted.Assets.Select(asset => asset.Kind == "audio" ? asset with { Duration = 500 } : asset).ToArray(),
         Synthesis = [reverted.Synthesis.Single() with { ActualDuration = 500 }]
     };
     await Throws<NotSupportedException>(() => Task.FromResult(VoicePlanner.SetState(mismatched, "replace-1", "applied")));
+    var stretched = reverted with
+    {
+        Replacements = [reverted.Replacements.Single() with { State = "preview", FitPolicy = "time-stretch" }],
+        Assets = reverted.Assets.Select(asset => asset.Kind == "audio" ? asset with { Duration = 1040 } : asset).ToArray(),
+        Synthesis = [reverted.Synthesis.Single() with { ActualDuration = 1040, FitPolicy = "time-stretch" }]
+    };
+    Assert(VoicePlanner.SetState(stretched, "replace-1", "applied").Replacements.Single().State == "applied",
+        "Bounded time-stretch preview was not applicable.");
+    var excessive = stretched with
+    {
+        Assets = stretched.Assets.Select(asset => asset.Kind == "audio" ? asset with { Duration = 1300 } : asset).ToArray(),
+        Synthesis = [stretched.Synthesis.Single() with { ActualDuration = 1300 }]
+    };
+    await Throws<NotSupportedException>(() => Task.FromResult(VoicePlanner.SetState(excessive, "replace-1", "applied")));
     await Throws<InvalidDataException>(() => Task.Run(() => WaveAudio.Inspect("not-wave"u8)));
     await Throws<RevisionConflictException>(() => operations.SetVoiceStateAsync(Path.GetFileName(path), 5, "replace-1", "applied"));
 });
@@ -497,7 +518,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
             await File.WriteAllTextAsync(speakerEdits, """[{"action":"rename","speakerId":"speaker-1","label":"Host","reason":"reviewed label"}]""");
             await RunCli("speaker-edit", voiceProjectPath, speakerEdits, "1");
             var voicePlan = Path.Combine(testRoot, "cli-voice-plan.json");
-            await File.WriteAllTextAsync(voicePlan, """{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"exact","backgroundPolicy":"require-isolated-dialogue"}}""");
+            await File.WriteAllTextAsync(voicePlan, """{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"time-stretch","backgroundPolicy":"require-isolated-dialogue"}}""");
             await RunCli("voice-plan", voiceProjectPath, voicePlan, "2");
             using var qwenServer = new TestQwenServer(TestAudio.PcmWave());
             var previousQwenEndpoint = Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT");

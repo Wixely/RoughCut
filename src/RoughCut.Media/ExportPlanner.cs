@@ -18,9 +18,8 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
         ExportPlan Rejected(string code, string message) => new(project.ProjectId, project.Revision, hash, project.ExportMode,
             project.TimeBase, false, false, [new(code, "export", message)], [], [], 0, 0, 0);
         if (project.Timeline.Length is 0 or > 32) return (Rejected("unsupported-timeline", "Export requires 1 to 32 clips."), null);
-        if (project.Replacements.Any(item => item.State == "applied"))
-            return (Rejected("unsupported-voice-replacement", "Applied voice replacement rendering is not implemented; it also cannot be copy-only."), null);
         var assets = project.Assets.ToDictionary(asset => asset.Id, StringComparer.Ordinal);
+        var appliedReplacements = project.Replacements.Where(item => item.State == "applied").ToArray();
         var activeVideoIds = project.Timeline.Where(clip => assets[clip.AssetId].Kind == "video").Select(clip => clip.AssetId).Distinct().ToArray();
         if (activeVideoIds.Length != 1 || project.Timeline.Any(clip => assets[clip.AssetId].Kind == "audio" ||
             (assets[clip.AssetId].Kind == "video" ? clip.Audio != "source" : clip.Audio != "silence")))
@@ -36,6 +35,46 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
             if (video.Info.Width != videoAsset.Width || video.Info.Height != videoAsset.Height ||
                 new MediaTime(videoAsset.Duration, project.TimeBase).CompareTo(new(video.Info.DurationTicks, video.Info.TimeBase)) != 0)
                 return (Rejected("source-metadata-mismatch", "Source dimensions or duration differ from the project."), null);
+            var voicesByClip = new Dictionary<string, List<ResolvedVoiceReplacement>>(StringComparer.Ordinal);
+            foreach (var replacement in appliedReplacements)
+            {
+                var segment = project.Speech.Single(item => item.Id == replacement.SegmentId);
+                if (segment.AssetId != videoAsset.Id)
+                    return (Rejected("unsupported-voice-source", "Applied voice replacements must reference the active video/audio source."), null);
+                var intersecting = project.Timeline.Where(clip => clip.AssetId == segment.AssetId &&
+                    clip.In < segment.End && clip.Out > segment.Start).ToArray();
+                if (intersecting.Length != 1 || intersecting[0].In > segment.Start || intersecting[0].Out < segment.End)
+                    return (Rejected("unsupported-voice-edit", "Each applied voice interval must be fully retained exactly once inside one video clip."), null);
+                var synthesis = project.Synthesis.Single(item => item.ReplacementId == replacement.Id);
+                if (replacement.FitPolicy == "exact" && synthesis.ActualDuration != synthesis.RequestedDuration)
+                    return (Rejected("unsupported-voice-fit", "Exact voice replacement duration differs from its speech interval."), null);
+                if (replacement.FitPolicy == "time-stretch" &&
+                    !VoiceFitPolicy.IsWithinLimit(synthesis.RequestedDuration, synthesis.ActualDuration))
+                    return (Rejected("unsupported-voice-fit", "Voice time-stretch exceeds the supported 0.8x to 1.25x tempo range."), null);
+                var generated = assets[replacement.GeneratedAssetId!];
+                if (generated.MediaType != "audio/wav")
+                    return (Rejected("unsupported-voice-audio", "Applied voice assets must be PCM WAVE previews."), null);
+                var generatedPath = ProjectFiles.Resolve(projectPath, generated.Path);
+                var bytes = await ProjectFiles.ReadBoundedAsync(generatedPath, WaveAudio.MaxBytes, cancellationToken);
+                if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), generated.Sha256, StringComparison.OrdinalIgnoreCase))
+                    return (Rejected("voice-audio-changed", "A generated voice fingerprint differs from the project; synthesize or import it again."), null);
+                var wave = WaveAudio.Inspect(bytes);
+                var inputDuration = TimeMath.ExactTicks(new(wave.Samples, new(1, wave.SampleRate)), project.TimeBase);
+                if (inputDuration != generated.Duration || inputDuration != synthesis.ActualDuration)
+                    return (Rejected("voice-metadata-mismatch", "Generated voice duration differs from its project provenance."), null);
+                var firstSample = TimeMath.ExactTicks(new(segment.Start, project.TimeBase), new(1, source.SampleRate));
+                var endSample = TimeMath.ExactTicks(new(segment.End, project.TimeBase), new(1, source.SampleRate));
+                if (!voicesByClip.TryGetValue(intersecting[0].Id, out var resolved))
+                    voicesByClip[intersecting[0].Id] = resolved = [];
+                resolved.Add(new(replacement.Id, generated.Id, segment.Start, segment.End, firstSample, endSample,
+                    replacement.FitPolicy, wave.Samples, wave.SampleRate, wave.Channels));
+            }
+            foreach (var voices in voicesByClip.Values)
+            {
+                voices.Sort((left, right) => left.FirstSample.CompareTo(right.FirstSample));
+                if (voices.Zip(voices.Skip(1)).Any(pair => pair.First.EndSample > pair.Second.FirstSample))
+                    return (Rejected("unsupported-voice-overlap", "Applied voice replacement intervals cannot overlap."), null);
+            }
             foreach (var imageAsset in project.Timeline.Select(clip => assets[clip.AssetId]).Where(asset => asset.Kind == "image").DistinctBy(asset => asset.Id))
             {
                 if (imageAsset.MediaType != "image/png") return (Rejected("unsupported-image", "Timed images must be PNG assets."), null);
@@ -61,7 +100,8 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
             var height = firstVideoClip.Crop?.Height ?? videoAsset.Height;
             var clips = new List<ResolvedClip>();
             var hasImages = project.Timeline.Any(clip => assets[clip.AssetId].Kind == "image");
-            var copyAudio = source.ExactAudioPackets && !hasImages;
+            var hasVoices = appliedReplacements.Length > 0;
+            var copyAudio = source.ExactAudioPackets && !hasImages && !hasVoices;
             var audioBoundaries = source.AudioPackets.Select(packet => packet.Pts)
                 .Append(TimeMath.ExactTicks(new(video.Info.DurationTicks, video.Info.TimeBase), source.AudioTimeBase)).ToHashSet();
             var frameDuration = video.Frames[0].Duration;
@@ -80,10 +120,12 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
                     var audioStart = TimeMath.ExactTicks(new(clip.In, project.TimeBase), source.AudioTimeBase);
                     var audioEnd = TimeMath.ExactTicks(new(clip.Out, project.TimeBase), source.AudioTimeBase);
                     copyAudio &= audioBoundaries.Contains(audioStart) && audioBoundaries.Contains(audioEnd);
+                    var clipVoices = voicesByClip.TryGetValue(clip.Id, out var replacements)
+                        ? replacements.ToArray() : [];
                     clips.Add(new(clip.Id, clip.AssetId, clip.In, clip.Out, clip.In, clip.Out, maps[i].OutputIn, maps[i].OutputOut,
                         checked((int)(start / frameDuration)), checked((int)(end / frameDuration)),
                         TimeMath.ExactTicks(new(clip.In, project.TimeBase), new(1, source.SampleRate)),
-                        TimeMath.ExactTicks(new(clip.Out, project.TimeBase), new(1, source.SampleRate)), clip.Crop));
+                        TimeMath.ExactTicks(new(clip.Out, project.TimeBase), new(1, source.SampleRate)), clip.Crop, clipVoices));
                 }
                 else
                 {
@@ -92,7 +134,7 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
                         return (Rejected("unsupported-image-duration", "Image hold duration must align exactly to the source frame cadence."), null);
                     var samples = TimeMath.ExactTicks(new(clip.Out, project.TimeBase), new(1, source.SampleRate));
                     clips.Add(new(clip.Id, clip.AssetId, 0, clip.Out, 0, clip.Out, maps[i].OutputIn, maps[i].OutputOut,
-                        0, checked((int)(duration / frameDuration)), 0, samples, clip.Crop));
+                        0, checked((int)(duration / frameDuration)), 0, samples, clip.Crop, []));
                 }
             }
             var copyVideo = !hasImages && source.CompletePngPackets && project.Timeline.All(clip => clip.Crop is null);
@@ -101,8 +143,9 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
                 new("video", hasImages ? $"{video.Info.Codec}+png" : video.Info.Codec, copyVideo ? "png" : "ffv1", copyVideo ? "copy" : "encode",
                     copyVideo ? "Each packet contains a complete independent RGB8 PNG; cuts match its display interval." :
                     hasImages ? "Timed images require a fitted lossless render of the complete output timeline." : "Crop or unproven copy codec requires lossless FFV1 encoding; processing is slower."),
-                new("audio", hasImages ? "pcm_s16le+silence" : "pcm_s16le", "pcm_s16le", copyAudio ? "copy" : "encode",
+                new("audio", hasVoices ? "pcm_s16le+qwen-wav" : hasImages ? "pcm_s16le+silence" : "pcm_s16le", "pcm_s16le", copyAudio ? "copy" : "encode",
                     copyAudio ? "PCM packets have exact sample timing and both cuts align to packet boundaries." :
+                    hasVoices ? "Applied voice intervals replace isolated source dialogue with fitted, validated PCM; the complete audio timeline is encoded." :
                     hasImages ? "Timed images insert exact-duration PCM silence, so the complete audio timeline is encoded." : "Cuts or container timestamp rounding require exact sample trimming and PCM encoding.")
             ];
             var requiresEncoding = !copyVideo || !copyAudio;

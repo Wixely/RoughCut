@@ -155,21 +155,10 @@ internal static class ExportTests
             var report = await exporter.ExportAsync(path, destination, allowEncoding: true);
             Assert(report.Plan.Width == 80 && report.Plan.Height == 48 && report.Validation.VideoContentMatches && report.Validation.AudioContentMatches, "Crop export failed validation.");
         });
-        await check("Unaligned cuts, active voice replacements and image-only timelines are rejected", async () =>
+        await check("Unaligned cuts and image-only timelines are rejected", async () =>
         {
             var unaligned = project with { Timeline = [new("bad", "source-1", 50, 1000)] };
             Assert(!(await planner.PreflightAsync(unaligned, projectPath)).Supported, "Unaligned cut accepted.");
-            var voices = project with
-            {
-                Assets = [.. project.Assets, new("voice-audio", "audio", "voice.wav", new string('d', 64), 1000, 0, 0, "audio/wav")],
-                Speakers = [new("s", "Speaker")],
-                Speech = [new("s1", "source-1", 0, 1000, "text", ["s"], "corrected")],
-                Voices = [new("v", "s", "qwen-tts", "voice")],
-                Replacements = [new("r", "s1", "v", "text", "voice-audio", "applied", "exact")],
-                Synthesis = [new("r", "qwen-tts", "unspecified", "fixture", "voice", "Auto",
-                    Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("text"u8.ToArray())), new string('d', 64), 1000, 1000, "exact")]
-            };
-            Assert((await planner.PreflightAsync(voices, projectPath)).Issues[0].Code == "unsupported-voice-replacement", "Voice rendering silently omitted.");
             var image = project with
             {
                 Assets = [.. project.Assets, new("image", "image", "image.png", new string('c', 64), 0, 160, 96, "image/png")],
@@ -178,6 +167,58 @@ internal static class ExportTests
             Assert(!(await planner.PreflightAsync(image, projectPath)).Supported, "Image rendering silently omitted.");
             Assert(!(await planner.PreflightAsync(project with { Timeline = [project.Timeline[0] with { Crop = new(0, 0, 80, 48) }, project.Timeline[1]] }, projectPath)).Supported,
                 "Inconsistent crop dimensions accepted.");
+        });
+        await check("Applied voice replacement is fitted, rendered and sample-validated", async () =>
+        {
+            var voiceBytes = TestAudio.PcmWave(24000, 520);
+            var voicePath = Path.Combine(root, "voice.wav");
+            await File.WriteAllBytesAsync(voicePath, voiceBytes);
+            var voiceHash = Convert.ToHexStringLower(SHA256.HashData(voiceBytes));
+            var voiceProject = project with
+            {
+                ProjectId = "voice-render",
+                Revision = 1,
+                ExportMode = "prefer-stream-copy",
+                Assets = [.. project.Assets, new("voice-audio", "audio", "voice.wav", voiceHash, 520, 0, 0, "audio/wav")],
+                Speakers = [new("speaker", "Speaker")],
+                Speech = [new("speech-1", "source-1", 0, 500, "First replacement", ["speaker"], "corrected"),
+                    new("speech-2", "source-1", 500, 1000, "Second replacement", ["speaker"], "corrected")],
+                Voices = [new("voice", "speaker", "qwen-tts", "aiden", "fixture-model", "English")],
+                Replacements = [new("replacement-1", "speech-1", "voice", "First replacement", "voice-audio", "applied", "time-stretch"),
+                    new("replacement-2", "speech-2", "voice", "Second replacement", "voice-audio", "applied", "time-stretch")],
+                Synthesis = [new("replacement-1", "qwen-tts", "fixture-model", "fixture-runtime", "aiden", "English",
+                    Convert.ToHexStringLower(SHA256.HashData("First replacement"u8.ToArray())), voiceHash, 500, 520, "time-stretch"),
+                    new("replacement-2", "qwen-tts", "fixture-model", "fixture-runtime", "aiden", "English",
+                    Convert.ToHexStringLower(SHA256.HashData("Second replacement"u8.ToArray())), voiceHash, 500, 520, "time-stretch")],
+                Provenance = [new("voice-audio", "qwen-tts", "fixture-model", "source-1")]
+            };
+            var path = Path.Combine(root, "voice-render-project.json");
+            await store.SaveAsync(path, voiceProject, 0);
+            var plan = await planner.PreflightAsync(voiceProject, path);
+            Assert(plan.Supported && plan.RequiresEncoding && plan.Streams[0].Action == "copy" &&
+                plan.Streams[1].Action == "encode" && plan.Clips.Single(clip => clip.ClipId == "clip-1").VoiceReplacements.Length == 2 &&
+                plan.Clips.Single(clip => clip.ClipId == "clip-1").VoiceReplacements.All(item => item.FitPolicy == "time-stretch"),
+                "Voice preflight did not preserve the fitted source-to-output mapping.");
+            var strict = await planner.PreflightAsync(voiceProject with { ExportMode = "copy-only" }, path);
+            Assert(!strict.Supported && strict.Issues.Any(issue => issue.Code == "unsupported-copy-only"),
+                "Strict copy-only accepted replacement rendering.");
+            var partial = voiceProject with { Timeline = [new("partial", "source-1", 500, 1000)] };
+            Assert((await planner.PreflightAsync(partial, path)).Issues.Any(issue => issue.Code == "unsupported-voice-edit"),
+                "A partially retained voice interval was rendered.");
+            var destination = Path.Combine(root, "voice result");
+            await Throws<ExportRejectedException>(() => exporter.ExportAsync(path, destination));
+            var report = await exporter.ExportAsync(path, destination, allowEncoding: true);
+            Assert(report.Validation.AudioContentMatches && report.Validation.AudioSamples == 96000 &&
+                report.Plan.Streams.Single(stream => stream.Kind == "audio").Action == "encode",
+                "Voice replacement export did not validate exact fitted samples.");
+            var pcm = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", Path.Combine(destination, "video.mkv"),
+                "-map", "0:a:0", "-f", "s16le", "-c:a", "pcm_s16le", "pipe:1"]);
+            Assert(pcm.Output.AsSpan(0, 96000).ContainsAnyExcept((byte)0) &&
+                !pcm.Output.AsSpan(96000, 96000).ContainsAnyExcept((byte)0),
+                "Rendered timeline did not retain source audio then replace the selected interval.");
+            await File.AppendAllTextAsync(voicePath, "changed");
+            Assert((await planner.PreflightAsync(voiceProject, path)).Issues.Any(issue => issue.Code == "voice-audio-changed"),
+                "Changed generated voice audio was accepted.");
         });
         await check("Timed image insertion previews and exports fitted pixels with silence", async () =>
         {

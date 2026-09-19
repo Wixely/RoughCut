@@ -34,6 +34,13 @@ public sealed class ExportEngine(string ffmpeg = "ffmpeg", string ffprobe = "ffp
             var audioList = new StringBuilder("ffconcat version 1.0\n");
             var copyVideo = plan.Streams.Single(s => s.Kind == "video").Action == "copy";
             var copyAudio = plan.Streams.Single(s => s.Kind == "audio").Action == "copy";
+            var fittedVoices = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var voice in plan.Clips.SelectMany(clip => clip.VoiceReplacements).DistinctBy(item => item.ReplacementId))
+            {
+                var fitted = Path.Combine(staging, $"voice-{fittedVoices.Count}.mka");
+                await FitVoiceAsync(project, projectPath, source, voice, fitted, staging, cancellationToken);
+                fittedVoices.Add(voice.ReplacementId, fitted);
+            }
             for (int i = 0; i < plan.Clips.Length; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -67,10 +74,19 @@ public sealed class ExportEngine(string ffmpeg = "ffmpeg", string ffprobe = "ffp
                 if (asset.Kind == "video")
                 {
                     AddInput(audioArgs, source.Path);
-                    audioArgs.AddRange(["-map", $"0:{source.AudioIndex}", "-vn"]);
-                    // Output-side selection scans packets instead of inheriting video-keyframe seek preroll.
-                    if (copyAudio) audioArgs.AddRange(["-ss", start, "-t", duration, "-c:a", "copy"]);
-                    else audioArgs.AddRange(["-af", FormattableString.Invariant($"atrim=start_sample={clip.FirstSample}:end_sample={clip.EndSample},asetpts=N/SR/TB,asetnsamples=n={samplesPerFrame}:p=0"), "-c:a", "pcm_s16le"]);
+                    if (clip.VoiceReplacements.Length == 0)
+                    {
+                        audioArgs.AddRange(["-map", $"0:{source.AudioIndex}", "-vn"]);
+                        // Output-side selection scans packets instead of inheriting video-keyframe seek preroll.
+                        if (copyAudio) audioArgs.AddRange(["-ss", start, "-t", duration, "-c:a", "copy"]);
+                        else audioArgs.AddRange(["-af", FormattableString.Invariant($"atrim=start_sample={clip.FirstSample}:end_sample={clip.EndSample},asetpts=N/SR/TB,asetnsamples=n={samplesPerFrame}:p=0"), "-c:a", "pcm_s16le"]);
+                    }
+                    else
+                    {
+                        foreach (var voice in clip.VoiceReplacements) AddInput(audioArgs, fittedVoices[voice.ReplacementId]);
+                        audioArgs.AddRange(["-filter_complex", VoiceClipFilter(clip, source, samplesPerFrame),
+                            "-map", "[voiceout]", "-vn", "-c:a", "pcm_s16le"]);
+                    }
                 }
                 else
                 {
@@ -106,6 +122,12 @@ public sealed class ExportEngine(string ffmpeg = "ffmpeg", string ffprobe = "ffp
             foreach (var image in project.Timeline.Select(clip => assets[clip.AssetId]).Where(asset => asset.Kind == "image").DistinctBy(asset => asset.Id))
                 if (!string.Equals(await MediaReader.FingerprintAsync(ProjectFiles.Resolve(projectPath, image.Path), cancellationToken), image.Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Image source changed during export.");
+            foreach (var voice in plan.Clips.SelectMany(clip => clip.VoiceReplacements).DistinctBy(item => item.AssetId))
+            {
+                var asset = assets[voice.AssetId];
+                if (!string.Equals(await MediaReader.FingerprintAsync(ProjectFiles.Resolve(projectPath, asset.Path), cancellationToken), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Generated voice source changed during export.");
+            }
             var captions = Captions.Retime(project);
             var report = new ExportReport(1, plan, source.Video.Info.Sha256, await MediaReader.FingerprintAsync(output, cancellationToken),
                 await VersionAsync(ffmpeg, cancellationToken), await VersionAsync(ffprobe, cancellationToken), validation, captions);
@@ -196,28 +218,61 @@ public sealed class ExportEngine(string ffmpeg = "ffmpeg", string ffprobe = "ffp
         await using var outputStream = File.OpenRead(outputPcm);
         var expectedBuffer = new byte[65536];
         var actualBuffer = new byte[65536];
-        foreach (var clip in plan.Clips)
+        var fittedPcm = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var voice in plan.Clips.SelectMany(clip => clip.VoiceReplacements).DistinctBy(item => item.ReplacementId))
         {
-            var image = assets[clip.AssetId].Kind == "image";
-            if (!image) sourceStream.Position = clip.FirstSample * sampleBytes;
-            long remaining = (clip.EndSample - clip.FirstSample) * sampleBytes;
+            var path = Path.Combine(staging, $"validation-voice-{fittedPcm.Count}.pcm");
+            var fitted = Path.Combine(staging, $"voice-{fittedPcm.Count}.mka");
+            await DecodePcmAsync(fitted, 0, path, cancellationToken);
+            if (new FileInfo(path).Length != (voice.EndSample - voice.FirstSample) * sampleBytes)
+                throw new InvalidDataException("Fitted voice sample count differs from its speech interval.");
+            fittedPcm.Add(voice.ReplacementId, path);
+        }
+        async Task CompareAsync(Stream expected, long samples, string message)
+        {
+            long remaining = samples * sampleBytes;
             while (remaining > 0)
             {
                 var count = (int)Math.Min(remaining, expectedBuffer.Length);
+                await expected.ReadExactlyAsync(expectedBuffer.AsMemory(0, count), cancellationToken);
                 await outputStream.ReadExactlyAsync(actualBuffer.AsMemory(0, count), cancellationToken);
-                if (image)
-                {
-                    if (actualBuffer.AsSpan(0, count).ContainsAnyExcept((byte)0))
-                        throw new InvalidDataException("Timed image audio is not silent.");
-                }
-                else
-                {
-                    await sourceStream.ReadExactlyAsync(expectedBuffer.AsMemory(0, count), cancellationToken);
-                }
-                if (!image && !expectedBuffer.AsSpan(0, count).SequenceEqual(actualBuffer.AsSpan(0, count)))
-                    throw new InvalidDataException("Export audio samples differ from the requested source intervals.");
+                if (!expectedBuffer.AsSpan(0, count).SequenceEqual(actualBuffer.AsSpan(0, count)))
+                    throw new InvalidDataException(message);
                 remaining -= count;
             }
+        }
+        foreach (var clip in plan.Clips)
+        {
+            var image = assets[clip.AssetId].Kind == "image";
+            if (image)
+            {
+                long remaining = (clip.EndSample - clip.FirstSample) * sampleBytes;
+                while (remaining > 0)
+                {
+                    var count = (int)Math.Min(remaining, actualBuffer.Length);
+                    await outputStream.ReadExactlyAsync(actualBuffer.AsMemory(0, count), cancellationToken);
+                    if (actualBuffer.AsSpan(0, count).ContainsAnyExcept((byte)0))
+                        throw new InvalidDataException("Timed image audio is not silent.");
+                    remaining -= count;
+                }
+                continue;
+            }
+            long cursor = clip.FirstSample;
+            foreach (var voice in clip.VoiceReplacements)
+            {
+                sourceStream.Position = cursor * sampleBytes;
+                await CompareAsync(sourceStream, voice.FirstSample - cursor,
+                    "Export audio samples outside voice replacements differ from the requested source intervals.");
+                await using (var replacement = File.OpenRead(fittedPcm[voice.ReplacementId]))
+                {
+                    await CompareAsync(replacement, voice.EndSample - voice.FirstSample,
+                        "Export voice samples differ from the fitted generated preview.");
+                }
+                cursor = voice.EndSample;
+            }
+            sourceStream.Position = cursor * sampleBytes;
+            await CompareAsync(sourceStream, clip.EndSample - cursor,
+                "Export audio samples outside voice replacements differ from the requested source intervals.");
         }
         return new(frameCount, sampleCount, plan.Clips.Length - 1, true, true, true, actual.MaximumAudioTimestampErrorMicroseconds);
     }
@@ -241,6 +296,62 @@ public sealed class ExportEngine(string ffmpeg = "ffmpeg", string ffprobe = "ffp
         await ToolProcess.RunAsync(ffmpeg, args, cancellationToken: cancellationToken);
     }
 
+    private async Task FitVoiceAsync(EditProject project, string projectPath, ExportSource source,
+        ResolvedVoiceReplacement voice, string destination, string staging, CancellationToken cancellationToken)
+    {
+        var asset = project.Assets.Single(item => item.Id == voice.AssetId);
+        var synthesis = project.Synthesis.Single(item => item.ReplacementId == voice.ReplacementId);
+        var targetSamples = voice.EndSample - voice.FirstSample;
+        var layout = source.Channels == 1 ? "mono" : "stereo";
+        var filter = FormattableString.Invariant($"aresample={source.SampleRate},aformat=sample_fmts=s16:sample_rates={source.SampleRate}:channel_layouts={layout}");
+        if (voice.FitPolicy == "time-stretch")
+        {
+            var tempo = (decimal)synthesis.ActualDuration / synthesis.RequestedDuration;
+            filter += ",atempo=" + tempo.ToString("0.################", CultureInfo.InvariantCulture);
+        }
+        filter += FormattableString.Invariant($",atrim=end_sample={targetSamples},apad=whole_len={targetSamples},atrim=end_sample={targetSamples},asetpts=N/SR/TB");
+        var args = BaseArguments();
+        AddWaveInput(args, ProjectFiles.Resolve(projectPath, asset.Path));
+        args.AddRange(["-map", "0:a:0", "-vn", "-af", filter, "-c:a", "pcm_s16le"]);
+        AddOutput(args, destination, RemainingBudget(staging));
+        await ToolProcess.RunAsync(ffmpeg, args, cancellationToken: cancellationToken);
+        var check = Path.Combine(staging, $"fit-check-{Guid.NewGuid():N}.pcm");
+        await DecodePcmAsync(destination, 0, check, cancellationToken);
+        try
+        {
+            if (new FileInfo(check).Length != targetSamples * source.Channels * 2)
+                throw new InvalidDataException("Fitted voice does not contain the exact requested sample count.");
+        }
+        finally { File.Delete(check); }
+    }
+
+    private static string VoiceClipFilter(ResolvedClip clip, ExportSource source, long samplesPerFrame)
+    {
+        var filters = new List<string>();
+        var inputs = new StringBuilder();
+        long cursor = clip.FirstSample;
+        int part = 0;
+        for (var index = 0; index < clip.VoiceReplacements.Length; index++)
+        {
+            var voice = clip.VoiceReplacements[index];
+            if (voice.FirstSample > cursor)
+            {
+                filters.Add(FormattableString.Invariant($"[0:{source.AudioIndex}]atrim=start_sample={cursor}:end_sample={voice.FirstSample},asetpts=N/SR/TB[p{part}]"));
+                inputs.Append("[p").Append(part++).Append(']');
+            }
+            filters.Add(FormattableString.Invariant($"[{index + 1}:a:0]atrim=end_sample={voice.EndSample - voice.FirstSample},asetpts=N/SR/TB[p{part}]"));
+            inputs.Append("[p").Append(part++).Append(']');
+            cursor = voice.EndSample;
+        }
+        if (cursor < clip.EndSample)
+        {
+            filters.Add(FormattableString.Invariant($"[0:{source.AudioIndex}]atrim=start_sample={cursor}:end_sample={clip.EndSample},asetpts=N/SR/TB[p{part}]"));
+            inputs.Append("[p").Append(part++).Append(']');
+        }
+        filters.Add(FormattableString.Invariant($"{inputs}concat=n={part}:v=0:a=1,asetnsamples=n={samplesPerFrame}:p=0[voiceout]"));
+        return string.Join(';', filters);
+    }
+
     private async Task<string> ImageFrameHashAsync(string path, TimelineClip timelineClip, MediaAsset asset,
         ExportPlan plan, ExportSource source, CancellationToken cancellationToken)
     {
@@ -261,6 +372,7 @@ public sealed class ExportEngine(string ffmpeg = "ffmpeg", string ffprobe = "ffp
 
     private static List<string> BaseArguments() => ["-v", "error", "-nostdin", "-xerror", "-n"];
     private static void AddInput(List<string> args, string path) => args.AddRange(["-protocol_whitelist", "file", "-format_whitelist", "matroska,webm", "-noautorotate", "-i", path]);
+    private static void AddWaveInput(List<string> args, string path) => args.AddRange(["-protocol_whitelist", "file", "-format_whitelist", "wav", "-i", path]);
     private static void AddImageInput(List<string> args, string path, ExportSource source)
     {
         var frameDuration = source.Video.Frames[0].Duration;

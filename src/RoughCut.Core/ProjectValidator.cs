@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace RoughCut.Core;
 
 public static class ProjectValidator
@@ -217,7 +220,8 @@ public static class ProjectValidator
             Check(!string.IsNullOrWhiteSpace(replacement.Text), replacement.Id, "Synthesis text is required.");
             Check(replacement.Text.Length <= 4096 && replacement.State is "requested" or "preview" or "applied" or "reverted",
                 replacement.Id, "Replacement text or state is invalid.");
-            Check(replacement.FitPolicy == "exact", replacement.Id, "Only exact-duration voice replacement is supported.");
+            Check(replacement.FitPolicy is "exact" or "time-stretch", replacement.Id,
+                "Voice replacement fit policy must be exact or time-stretch.");
             Check(replacement.BackgroundPolicy == "require-isolated-dialogue", replacement.Id,
                 "Voice replacement requires the isolated-dialogue background policy.");
             Check(replacement.GeneratedAssetId is null || (assets.TryGetValue(replacement.GeneratedAssetId, out var audio) && audio.Kind == "audio"),
@@ -232,6 +236,7 @@ public static class ProjectValidator
             Id(synthesis.ReplacementId, "synthesis.replacementId");
             var replacement = project.Replacements.SingleOrDefault(item => item.Id == synthesis.ReplacementId);
             var mapping = replacement is null ? null : project.Voices.SingleOrDefault(item => item.Id == replacement.MappingId);
+            var segment = replacement is null ? null : project.Speech.SingleOrDefault(item => item.Id == replacement.SegmentId);
             var generated = replacement?.GeneratedAssetId is null ? null : project.Assets.SingleOrDefault(item => item.Id == replacement.GeneratedAssetId);
             Check(replacement is not null && generated?.Kind == "audio", synthesis.ReplacementId,
                 "Synthesis provenance must reference a replacement with generated audio.");
@@ -240,12 +245,20 @@ public static class ProjectValidator
                 synthesis.ReplacementId, "Synthesis provider settings must match the voice mapping.");
             Check(!string.IsNullOrWhiteSpace(synthesis.Runtime) && synthesis.Runtime.Length <= 256,
                 synthesis.ReplacementId, "Synthesis runtime is required and bounded.");
+            var expectedTextHash = replacement is null ? null : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(replacement.Text)));
             Check(synthesis.TextSha256.Length == 64 && synthesis.TextSha256.All(Uri.IsHexDigit) &&
                 synthesis.AudioSha256.Length == 64 && synthesis.AudioSha256.All(Uri.IsHexDigit) &&
+                string.Equals(synthesis.TextSha256, expectedTextHash, StringComparison.OrdinalIgnoreCase) &&
                 generated is not null && string.Equals(generated.Sha256, synthesis.AudioSha256, StringComparison.OrdinalIgnoreCase),
                 synthesis.ReplacementId, "Synthesis hashes are invalid or do not match generated audio.");
-            Check(synthesis.RequestedDuration > 0 && synthesis.ActualDuration > 0 && synthesis.FitPolicy == replacement?.FitPolicy,
+            Check(synthesis.RequestedDuration > 0 && synthesis.ActualDuration > 0 && segment is not null &&
+                synthesis.RequestedDuration == segment.End - segment.Start &&
+                generated?.Duration == synthesis.ActualDuration && synthesis.FitPolicy == replacement?.FitPolicy,
                 synthesis.ReplacementId, "Synthesis duration or fit provenance is invalid.");
+            if (replacement?.State == "applied")
+                Check(replacement.FitPolicy == "exact" ? synthesis.ActualDuration == synthesis.RequestedDuration :
+                    VoiceFitPolicy.IsWithinLimit(synthesis.RequestedDuration, synthesis.ActualDuration),
+                    synthesis.ReplacementId, "Applied synthesis does not satisfy its duration-fit policy.");
         }
         Check(project.Replacements.All(item => item.State == "requested" || project.Synthesis.Any(p => p.ReplacementId == item.Id)),
             "synthesis", "Every generated voice preview requires synthesis provenance.");

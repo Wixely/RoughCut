@@ -68,7 +68,7 @@ internal static class McpTests
             {
                 ["projectPath"] = "mcp-voice-project.json",
                 ["expectedRevision"] = 2L,
-                ["submission"] = JsonDocument.Parse("""{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"exact","backgroundPolicy":"require-isolated-dialogue"}}""").RootElement.Clone()
+                ["submission"] = JsonDocument.Parse("""{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"time-stretch","backgroundPolicy":"require-isolated-dialogue"}}""").RootElement.Clone()
             });
             Assert(planned.IsError != true, "MCP voice plan failed.");
             var imported = await client.CallToolAsync("roughcut_synthesize_voice", new Dictionary<string, object?>

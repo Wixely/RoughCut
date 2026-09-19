@@ -109,7 +109,7 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
             ProjectJson.Default.EditProject);
 
     [McpServerTool(Name = "roughcut_plan_voice_replacement")]
-    [Description("Create a Qwen TTS voice mapping and a reversible exact-duration replacement request for corrected, non-overlapping isolated dialogue.")]
+    [Description("Create a Qwen TTS voice mapping and reversible exact or bounded time-stretch replacement request for corrected, non-overlapping isolated dialogue.")]
     public Task<CallToolResult> PlanVoiceReplacementAsync(string projectPath, long expectedRevision,
         VoicePlanSubmission submission, CancellationToken cancellationToken) => TextAsync(
             () => operations.PlanVoiceAsync(projectPath, expectedRevision, submission, cancellationToken),
@@ -160,7 +160,7 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
     }
 
     [McpServerTool(Name = "roughcut_set_voice_replacement_state")]
-    [Description("Apply or revert an imported voice preview. Applying requires exact duration; export remains explicitly unsupported while applied.")]
+    [Description("Apply or revert a voice preview. Exact fit requires equal duration; time-stretch accepts 0.8x to 1.25x and renders only through encoding-authorized export.")]
     public Task<CallToolResult> SetVoiceReplacementStateAsync(string projectPath, long expectedRevision,
         string replacementId, string state, CancellationToken cancellationToken) => TextAsync(
             () => operations.SetVoiceStateAsync(projectPath, expectedRevision, replacementId, state, cancellationToken),

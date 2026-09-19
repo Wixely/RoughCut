@@ -12,7 +12,7 @@
     "segmentId": "speech-1",
     "mappingId": "voice-1",
     "text": "Replacement text",
-    "fitPolicy": "exact",
+    "fitPolicy": "time-stretch",
     "backgroundPolicy": "require-isolated-dialogue"
   }
 }
