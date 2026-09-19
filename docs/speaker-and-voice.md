@@ -4,7 +4,11 @@
 - Review: When the Qwen service contract/runtime, duration policy, diarization or rendering changes
 - Owner: Implementation agent
 
-RoughCut now keeps stable speaker IDs separate from display labels. A revision-checked speaker edit batch can add or rename speakers, assign one or more speakers to transcript segments, or merge labels. Adding a speaker and assigning selected segments provides the split workflow. Every change records its action, affected segments, before/after IDs or labels, reason and project revision.
+RoughCut keeps stable speaker IDs separate from display labels. A provider-neutral diarization submission supplies bounded source-time turns with provider-local speaker keys. RoughCut deterministically maps those keys to persistent project speaker IDs, assigns the dominant speaker to ordinary transcript segments, records concurrent speakers as overlap, leaves uncovered segments unknown, and preserves every manually corrected assignment. Repeating the same provider/model submission reuses its mapping. A reviewed speaker merge also redirects the saved provider keys so later runs do not recreate the merged identity.
+
+A revision-checked speaker edit batch can add or rename speakers, assign one or more speakers to transcript segments, or merge labels. Adding a speaker and assigning selected segments provides the split workflow. Every manual change records its action, affected segments, before/after IDs or labels, reason and project revision. Diarization stores source hash, provider, model, canonical submission hash, cluster mapping and revision independently of Qwen voice configuration.
+
+The current boundary accepts turns through `diarization-save` or `roughcut_save_diarization`; it does not yet run a model. `sherpa-onnx` 1.13.8 is the leading runtime candidate because its official C# API exposes offline Pyannote-segmentation and speaker-embedding clustering on Windows and Linux. Adoption remains gated on a labelled-fixture execution, model/license review, cancellation behavior and packaging evidence.
 
 The bounded voice workflow is deliberately reversible:
 
@@ -29,6 +33,7 @@ This establishes a local provider boundary, not a packaged RoughCut dependency. 
 ## CLI examples
 
 ```powershell
+dotnet run --project src/RoughCut.Cli -- diarization-save project.json examples/diarization-submission.json 1
 dotnet run --project src/RoughCut.Cli -- speaker-edit project.json examples/speaker-edits.json 1
 dotnet run --project src/RoughCut.Cli -- voice-plan project.json examples/voice-plan.json 2
 $env:ROUGHCUT_QWEN_ENDPOINT = "http://127.0.0.1:8080/"
@@ -39,4 +44,4 @@ dotnet run --project src/RoughCut.Cli -- voice-state project.json 4 replacement-
 dotnet run --project src/RoughCut.Cli -- voice-state project.json 5 replacement-1 reverted
 ```
 
-Next owner/action: **Implementation agent: evaluate diarization against labelled fixtures and feed stable assignments into the correction workflow; Wixely: provide representative multi-speaker and replacement examples.**
+Next owner/action: **Implementation agent: execute the sherpa-onnx candidate against labelled multi-speaker fixtures and measure assignment/overlap quality, cancellation and packaging; Wixely: provide representative multi-speaker and replacement examples.**
