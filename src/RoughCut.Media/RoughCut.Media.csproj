@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../RoughCut.Core/RoughCut.Core.csproj" />
+  </ItemGroup>
+</Project>

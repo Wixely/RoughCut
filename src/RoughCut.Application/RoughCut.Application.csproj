@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../RoughCut.Media/RoughCut.Media.csproj" />
+  </ItemGroup>
+</Project>

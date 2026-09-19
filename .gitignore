@@ -1,0 +1,23 @@
+# .NET and IDE outputs
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+
+# Local media, model assets, configuration and generated evidence
+/artifacts/
+/media/
+/models/
+/cache/
+/temp/
+/output/
+/logs/
+/local/
+.env
+.env.*
+!.env.example
+*.local.json
+*.log
+
+# Keep repository-local VS Code launch/tasks files trackable.

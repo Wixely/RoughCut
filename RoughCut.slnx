@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RoughCut.Core/RoughCut.Core.csproj" />
+    <Project Path="src/RoughCut.Media/RoughCut.Media.csproj" />
+    <Project Path="src/RoughCut.Application/RoughCut.Application.csproj" />
+    <Project Path="src/RoughCut.Cli/RoughCut.Cli.csproj" />
+    <Project Path="src/RoughCut.Mcp/RoughCut.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RoughCut.Tests/RoughCut.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,103 @@
+using System.Numerics;
+
+namespace RoughCut.Core;
+
+public static class TimeMath
+{
+    public static long ExactTicks(MediaTime time, TimeBase target)
+    {
+        if (!time.TimeBase.IsValid || !target.IsValid) throw new ArgumentException("Invalid time base.");
+        var numerator = (BigInteger)time.Ticks * time.TimeBase.Numerator * target.Denominator;
+        var denominator = (BigInteger)time.TimeBase.Denominator * target.Numerator;
+        var result = BigInteger.DivRem(numerator, denominator, out var remainder);
+        if (remainder != 0) throw new NotSupportedException("Timestamp is not exactly representable in the required time base.");
+        return checked((long)result);
+    }
+
+    public static MediaTime Add(MediaTime left, MediaTime right)
+    {
+        if (!left.TimeBase.IsValid || !right.TimeBase.IsValid) throw new ArgumentException("Invalid time base.");
+        var numerator = (BigInteger)left.Ticks * left.TimeBase.Numerator * right.TimeBase.Denominator +
+            (BigInteger)right.Ticks * right.TimeBase.Numerator * left.TimeBase.Denominator;
+        var denominator = (BigInteger)left.TimeBase.Denominator * right.TimeBase.Denominator;
+        var gcd = BigInteger.GreatestCommonDivisor(numerator, denominator);
+        return new(checked((long)(numerator / gcd)), new(1, checked((long)(denominator / gcd))));
+    }
+
+    public static MediaTime Subtract(MediaTime left, MediaTime right) => Add(left, right with { Ticks = checked(-right.Ticks) });
+}
+
+public sealed record EditOperation(string Action, string? ClipId = null, long? In = null,
+    long? Out = null, long? At = null, string? NewClipId = null, string[]? Order = null,
+    Crop? Crop = null, string? Mode = null);
+
+public static class TimelineEditor
+{
+    // Apply to an isolated list; a failed operation never partly changes the caller's project.
+    public static EditProject Apply(EditProject project, EditOperation[] operations)
+    {
+        ProjectValidator.EnsureValid(project);
+        if (operations.Length is 0 or > 1000) throw new ArgumentException("Supply 1 to 1000 edit operations.");
+        var clips = project.Timeline.ToList();
+        var mode = project.ExportMode;
+        foreach (var operation in operations)
+        {
+            if (operation is null) throw new ArgumentException("Null edit operation.");
+            var index = clips.FindIndex(c => c.Id == operation.ClipId);
+            if (operation.Action is not ("reorder" or "export-mode") && index < 0)
+                throw new ArgumentException("Edit references an unknown clip.");
+            var fields = new HashSet<string>();
+            if (operation.ClipId is not null) fields.Add("clipId");
+            if (operation.In is not null) fields.Add("in");
+            if (operation.Out is not null) fields.Add("out");
+            if (operation.At is not null) fields.Add("at");
+            if (operation.NewClipId is not null) fields.Add("newClipId");
+            if (operation.Order is not null) fields.Add("order");
+            if (operation.Crop is not null) fields.Add("crop");
+            if (operation.Mode is not null) fields.Add("mode");
+            string[] allowed = operation.Action switch
+            {
+                "trim" => ["clipId", "in", "out"],
+                "split" => ["clipId", "at", "newClipId"],
+                "remove" => ["clipId"],
+                "reorder" => ["order"],
+                "crop" => ["clipId", "crop"],
+                "export-mode" => ["mode"],
+                _ => throw new ArgumentException("Unknown edit action.")
+            };
+            if (fields.Except(allowed).Any()) throw new ArgumentException("Edit contains fields unrelated to its action.");
+            switch (operation.Action)
+            {
+                case "trim":
+                    if (operation.In is not { } start || operation.Out is not { } end ||
+                        start < clips[index].In || end > clips[index].Out || start >= end)
+                        throw new ArgumentException("Trim must retain a nonempty interval inside the clip.");
+                    clips[index] = clips[index] with { In = start, Out = end };
+                    break;
+                case "split":
+                    var clip = clips[index];
+                    if (operation.At is not { } at || at <= clip.In || at >= clip.Out ||
+                        string.IsNullOrWhiteSpace(operation.NewClipId) || clips.Any(c => c.Id == operation.NewClipId))
+                        throw new ArgumentException("Split requires an internal source boundary and a new unique clip ID.");
+                    if (project.Assets.Single(a => a.Id == clip.AssetId).Kind != "video")
+                        throw new NotSupportedException("Splitting image holds is not implemented.");
+                    clips[index] = clip with { Out = at };
+                    clips.Insert(index + 1, clip with { Id = operation.NewClipId, In = at });
+                    break;
+                case "remove": clips.RemoveAt(index); break;
+                case "crop": clips[index] = clips[index] with { Crop = operation.Crop }; break;
+                case "reorder":
+                    if (operation.Order is not { } order || order.Any(id => id is null) ||
+                        order.Length != clips.Count || order.Distinct().Count() != clips.Count ||
+                        order.Except(clips.Select(c => c.Id)).Any())
+                        throw new ArgumentException("Reorder must name every current clip exactly once.");
+                    clips = order.Select(id => clips.Single(c => c.Id == id)).ToList();
+                    break;
+                case "export-mode": mode = operation.Mode ?? throw new ArgumentException("Export mode is required."); break;
+            }
+        }
+        var result = project with { Revision = checked(project.Revision + 1), Timeline = clips.ToArray(), ExportMode = mode };
+        ProjectValidator.EnsureValid(result);
+        return result;
+    }
+}

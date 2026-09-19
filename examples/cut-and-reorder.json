@@ -1,0 +1,8 @@
+[
+  { "action": "split", "clipId": "clip-1", "at": 1000, "newClipId": "middle" },
+  { "action": "split", "clipId": "middle", "at": 2000, "newClipId": "later" },
+  { "action": "remove", "clipId": "middle" },
+  { "action": "trim", "clipId": "later", "in": 2000, "out": 3000 },
+  { "action": "reorder", "order": ["later", "clip-1"] },
+  { "action": "export-mode", "mode": "copy-only" }
+]

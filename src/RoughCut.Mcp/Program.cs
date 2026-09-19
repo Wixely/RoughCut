@@ -1,0 +1,44 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol;
+using RoughCut.Application;
+using RoughCut.Core;
+using RoughCut.Mcp;
+
+var workspace = GetOption(args, "--workspace") ?? Environment.GetEnvironmentVariable("ROUGHCUT_WORKSPACE");
+if (string.IsNullOrWhiteSpace(workspace))
+{
+    Console.Error.WriteLine("RoughCut MCP requires --workspace <directory> or ROUGHCUT_WORKSPACE.");
+    return 2;
+}
+
+try
+{
+    var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = args });
+    builder.Logging.ClearProviders();
+    var boundary = new WorkspaceBoundary(workspace);
+    var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
+    var ffprobe = Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe";
+    builder.Services.AddSingleton(boundary);
+    builder.Services.AddSingleton(new RoughCutOperations(boundary, ffmpeg, ffprobe));
+    builder.Services.AddSingleton(new ExportJobManager(boundary, ffmpeg, ffprobe));
+    var toolJson = new System.Text.Json.JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
+    toolJson.TypeInfoResolverChain.Insert(0, ProjectJson.Default);
+    builder.Services.AddMcpServer().WithStdioServerTransport().WithTools<RoughCutTools>(toolJson);
+    await builder.Build().RunAsync();
+    return 0;
+}
+catch (Exception exception) when (exception is IOException or ArgumentException or NotSupportedException)
+{
+    Console.Error.WriteLine(exception.Message);
+    return 2;
+}
+
+static string? GetOption(string[] values, string name)
+{
+    for (var i = 0; i < values.Length; i++)
+        if (string.Equals(values[i], name, StringComparison.OrdinalIgnoreCase))
+            return i + 1 < values.Length ? values[i + 1] : throw new ArgumentException(name + " requires a value.");
+    return null;
+}
