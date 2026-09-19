@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using RoughCut.Application;
 using RoughCut.Core;
+using RoughCut.Desktop;
 using RoughCut.Media;
 using RoughCut.Speech.Sherpa;
 
@@ -325,6 +326,35 @@ await Check("Isolated diarization cancellation kills its worker and preserves th
     {
         Environment.SetEnvironmentVariable("ROUGHCUT_TEST_DIARIZATION_WORKER_MARKER", priorMarker);
     }
+});
+
+await Check("Desktop speaker review uses revisioned edits with undo and redo", async () =>
+{
+    var directory = Path.Combine(testRoot, "desktop speaker review");
+    Directory.CreateDirectory(directory);
+    var source = Path.Combine(directory, "source.wav");
+    await File.WriteAllBytesAsync(source, "desktop fixture"u8.ToArray());
+    var projectPath = Path.Combine(directory, "project.json");
+    await store.SaveAsync(projectPath, new EditProject
+    {
+        ProjectId = "desktop-speaker-review",
+        TimeBase = new(1, 1000),
+        Assets = [new("source", "audio", "source.wav", await MediaReader.FingerprintAsync(source), 1000, 0, 0, "audio/wav")],
+        Speakers = [new("speaker-1", "Speaker 1")],
+        Speech = [new("speech", "source", 0, 1000, "Fixture", ["speaker-1"], "inferred")]
+    }, 0);
+    var session = await DesktopReviewSession.LoadAsync(projectPath);
+    session.SelectSpeaker("speaker-1");
+    await session.RenameSelectedSpeakerAsync("Host");
+    await session.UndoAsync();
+    await session.RedoAsync();
+    var reviewed = await store.LoadAsync(projectPath);
+    Assert(reviewed.Revision == 4 && reviewed.Speakers.Single().Label == "Host" &&
+        reviewed.SpeakerCorrections.Length == 3 && session.CanUndo && !session.CanRedo,
+        "Desktop speaker rename history did not preserve revisioned undo/redo.");
+    using var document = new RoughCutReviewApp(session).CreateDocument();
+    using var image = document.RenderToImage(1280, 800, new SkiaSharp.SKColor(0x0b, 0x0f, 0x17));
+    Assert(image.Width == 1280 && image.Height == 800, "Desktop review document did not render at the requested size.");
 });
 
 await Check("Speaker corrections and voice previews are revisioned and reversible", async () =>
@@ -661,6 +691,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
 }
 
 await ExportTests.RunAsync(Check, args, testRoot);
+await DesktopTests.RunAsync(Check, args, testRoot);
 await McpTests.RunAsync(Check, args, testRoot);
 
 Console.WriteLine($"{passed} passed; {failures} failed.");

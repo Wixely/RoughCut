@@ -9,6 +9,7 @@
     <Project Path="src/RoughCut.Speech.Cli/RoughCut.Speech.Cli.csproj" />
     <Project Path="src/RoughCut.Speech.Sherpa/RoughCut.Speech.Sherpa.csproj" />
     <Project Path="src/RoughCut.Diarization.Cli/RoughCut.Diarization.Cli.csproj" />
+    <Project Path="src/RoughCut.Desktop/RoughCut.Desktop.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RoughCut.Tests/RoughCut.Tests.csproj" />

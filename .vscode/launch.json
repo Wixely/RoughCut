@@ -23,6 +23,19 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut desktop review",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
+      "args": [
+        "review",
+        "${input:projectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: inspect video",
       "type": "coreclr",
       "request": "launch",
