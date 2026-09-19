@@ -2,7 +2,7 @@
 
 - Date: 2026-09-19
 - Status: Accepted for bounded Windows MVP
-- Review: sherpa/model upgrade, Linux acceptance, cancellation isolation, or representative quality testing
+- Review: sherpa/model upgrade, Linux acceptance, or representative quality testing
 
 ## Context
 
@@ -20,7 +20,7 @@ Require explicit absolute model paths. Permit a known speaker count from 1 throu
 
 Whisper continues to produce transcript text and timestamps. Sherpa assigns speaker clusters to those segments; it does not replace transcription or identify real people. The official two-speaker fixture produced two stable project speakers and split the eight test transcript intervals at the expected speaker change on Windows x64.
 
-FFmpeg decoding and managed steps honor cancellation and timeouts. The native `Process` call has no proven interruption mechanism, so cancellation is observed immediately after it returns. Process isolation, representative overlap/error measurement and Linux execution remain release work. Models remain external ignored assets and are not redistributed by this repository.
+The CLI and MCP host execute FFmpeg decoding and native inference in a dedicated worker process. Cancellation or timeout kills the entire worker process tree, deletes the bounded temporary project copy and prevents revision persistence. Representative overlap/error measurement and Linux execution remain release work. Models remain external ignored assets and are not redistributed by this repository.
 
 ## Evidence
 

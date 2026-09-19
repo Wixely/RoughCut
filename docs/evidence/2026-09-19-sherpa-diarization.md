@@ -2,7 +2,7 @@
 
 - Date: 2026-09-19
 - Scope: Windows x64 local runtime, dedicated CLI packaging and stable transcript assignment
-- Review trigger: dependency/model change, cancellation isolation, Linux claim, or representative quality acceptance
+- Review trigger: dependency/model change, Linux claim, or representative quality acceptance
 
 ## Executed configuration
 
@@ -17,10 +17,10 @@ The models and audio remain beneath ignored `artifacts/sherpa-diarization/`; no 
 
 ## Results
 
-The Debug provider and a framework-dependent Windows x64 publish both loaded the native runtime and completed inference. The published `roughcut-diarization.exe` run took 1.878 seconds wall time, including process startup and FFmpeg decode. It created two stable project speakers. Each two-second transcript interval from 0 through 8 seconds mapped to the first speaker, and each interval from 8 through 16 seconds mapped to the second. The persisted model provenance was `pyannote-segmentation-3.0:d582f4b4c6b4+3dspeaker-eres2net:1a331345f048@1.13.8`.
+The Debug provider and a framework-dependent Windows x64 publish both loaded the native runtime and completed inference. The initial published `roughcut-diarization.exe` run took 1.878 seconds wall time, including process startup and FFmpeg decode. After process isolation, the Debug CLI completed the same fixture in 1.534 seconds and the republished Windows x64 CLI completed it in 1.694 seconds. All runs created two stable project speakers. Each two-second transcript interval from 0 through 8 seconds mapped to the first speaker, and each interval from 8 through 16 seconds mapped to the second. The persisted model provenance was `pyannote-segmentation-3.0:d582f4b4c6b4+3dspeaker-eres2net:1a331345f048@1.13.8`.
 
-The provider validates source duration, bounds decoded PCM and native turns, fingerprints models before and after inference, and stores no local model path. The MCP protocol suite discovers `roughcut_diarize_local` and verifies actionable failure without model configuration or project mutation. Full managed and main-CLI NativeAOT verification are recorded in the handoff; the main CLI does not reference sherpa-onnx.
+The provider validates source duration, bounds decoded PCM and native turns, fingerprints models before and after inference, and stores no local model path. CLI and MCP execute the native provider in a child process. An executable contract fixture waits inside that child; cancellation kills it, removes the temporary project JSON and leaves the saved project at its prior revision. The MCP protocol suite discovers `roughcut_diarize_local` and verifies actionable failure without model configuration or project mutation. Full managed and main-CLI NativeAOT verification are recorded in the handoff; the main CLI does not reference sherpa-onnx.
 
 ## Limits
 
-This official sample is a useful wiring and gross speaker-change fixture, not a representative diarization benchmark. Speaker error rate, overlap handling, similar voices, noisy material and automatic speaker-count tuning remain unmeasured. Cancellation can stop FFmpeg and prevent or reject persistence, but cannot interrupt sherpa's native inference call once it starts. Linux execution and NativeAOT for the diarization CLI/MCP host are unverified.
+This official sample is a useful wiring and gross speaker-change fixture, not a representative diarization benchmark. Speaker error rate, overlap handling, similar voices, noisy material and automatic speaker-count tuning remain unmeasured. Linux execution and NativeAOT for the diarization CLI/MCP host are unverified.

@@ -84,4 +84,4 @@ Before publication, the exporter checks every output presentation timestamp and 
 
 Run `.\scripts\verify.ps1 -PublishAot` for the synthetic regression suite. The export fixture has visible binary frame IDs, a changing-frequency audio signal and supplied captions. The independent frame-ID check verifies the reorder around the join; production validation additionally checks every pixel hash, selected PCM sample and copied packet payload.
 
-Next owner/action: **Implementation agent: isolate Sherpa inference for hard cancellation and measure speaker/overlap error; Wixely: provide representative labelled examples**. Extend codec/container, background-aware replacement or image-compositing coverage only with equivalent join, pixel and audio evidence.
+Next owner/action: **Implementation agent: build the minimal desktop review UI and measure speaker/overlap error when representative fixtures are available; Wixely: provide representative labelled examples**. Extend codec/container, background-aware replacement or image-compositing coverage only with equivalent join, pixel and audio evidence.

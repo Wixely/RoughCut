@@ -18,7 +18,7 @@ Set `ROUGHCUT_QWEN_ENDPOINT` to an absolute loopback service root to enable live
 
 Set `ROUGHCUT_STT_MODEL` to the verified base.en model path to enable local transcription. `ROUGHCUT_STT_LANGUAGE` defaults to `en`; `ROUGHCUT_STT_CHUNK_SECONDS` defaults to 30 and must be 5–30. Inference stays local, while the explicit speech CLI `model` command can download and verify the model beforehand.
 
-Set `ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL` and `ROUGHCUT_DIARIZATION_EMBEDDING_MODEL` to absolute local ONNX model paths to enable Sherpa diarization. `ROUGHCUT_DIARIZATION_SPEAKER_COUNT` defaults to `0` for threshold clustering; set a known count from 1 through 64 when available. `ROUGHCUT_DIARIZATION_THRESHOLD` defaults to `0.5`. Models and decoded audio stay local.
+Set `ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL` and `ROUGHCUT_DIARIZATION_EMBEDDING_MODEL` to absolute local ONNX model paths to enable Sherpa diarization. `ROUGHCUT_DIARIZATION_SPEAKER_COUNT` defaults to `0` for threshold clustering; set a known count from 1 through 64 when available. `ROUGHCUT_DIARIZATION_THRESHOLD` defaults to `0.5`. The host uses its co-published `roughcut-diarization.dll` worker; `ROUGHCUT_DIARIZATION_WORKER` can override that absolute path. Models and decoded audio stay local. Cancellation kills the worker process tree and does not persist a partial result.
 
 The current tools are:
 
