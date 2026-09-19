@@ -1,0 +1,17 @@
+{
+  "assetId": "source-1",
+  "provider": "labelled-fixture",
+  "model": "manual-v1",
+  "turns": [
+    {
+      "speakerKey": "speaker-a",
+      "start": 0,
+      "end": 4000
+    },
+    {
+      "speakerKey": "speaker-b",
+      "start": 4000,
+      "end": 8000
+    }
+  ]
+}

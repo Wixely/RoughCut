@@ -299,6 +299,16 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: save diarization",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["diarization-save", "${input:projectPath}", "${input:diarizationSubmissionPath}", "${input:expectedRevision}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: plan voice replacement",
       "type": "coreclr",
       "request": "launch",
@@ -530,6 +540,12 @@
       "type": "promptString",
       "description": "Speaker edit batch JSON",
       "default": "examples/speaker-edits.json"
+    },
+    {
+      "id": "diarizationSubmissionPath",
+      "type": "promptString",
+      "description": "Provider-neutral diarization turn JSON",
+      "default": "examples/diarization-submission.json"
     },
     {
       "id": "voicePlanPath",

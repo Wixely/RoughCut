@@ -226,6 +226,48 @@ await Check("Analysis proposals retain uncertainty and apply only revision-bound
         automatic.Project with { Revision = 3 })));
 });
 
+await Check("Diarization assigns stable speakers and preserves reviewed corrections", async () =>
+{
+    var fixture = Fixture();
+    var project = fixture with
+    {
+        Speakers = [new("reviewed", "Reviewed host")],
+        Voices = [],
+        Replacements = [],
+        Synthesis = [],
+        Speech =
+        [
+            new("speech-a", "video", 0, 1000, "First", [], "unknown"),
+            new("speech-overlap", "video", 1000, 2000, "Overlap", [], "unknown"),
+            new("speech-reviewed", "video", 2000, 3000, "Reviewed", ["reviewed"], "corrected"),
+            new("speech-unknown", "video", 3000, 4000, "Unknown", [], "unknown")
+        ]
+    };
+    var submission = new DiarizationSubmission("video", "fixture-diarizer", "labelled-v1",
+    [
+        new("cluster-a", 0, 1800),
+        new("cluster-b", 1200, 2000)
+    ]);
+    var first = DiarizationPlanner.Plan(project, submission);
+    var overlap = first.Project.Speech.Single(item => item.Id == "speech-overlap");
+    Assert(first.InferredSegments == 2 && first.UnknownSegments == 1 && first.PreservedCorrections == 1 &&
+        first.Project.Speech.Single(item => item.Id == "speech-a").SpeakerIds.Length == 1 &&
+        overlap.SpeakerIds.Length == 2 && overlap.Overlap &&
+        first.Project.Speech.Single(item => item.Id == "speech-reviewed").SpeakerIds.SequenceEqual(["reviewed"]),
+        "Diarization did not map dominant, overlapping, unknown and corrected speech safely.");
+    var stable = DiarizationPlanner.Plan(first.Project, submission);
+    Assert(stable.Project.Speakers.Length == first.Project.Speakers.Length &&
+        stable.Project.Diarization!.Speakers.SequenceEqual(first.Project.Diarization!.Speakers),
+        "Repeated diarization did not retain stable project speaker IDs.");
+    var merged = SpeakerEditor.Apply(stable.Project,
+        [new("merge", SpeakerId: overlap.SpeakerIds[1], TargetSpeakerId: overlap.SpeakerIds[0], Reason: "reviewed duplicate cluster")]);
+    Assert(merged.Diarization!.Speakers.Select(item => item.SpeakerId).Distinct().Count() == 1 &&
+        DiarizationPlanner.Plan(merged, submission).Project.Speech.Single(item => item.Id == "speech-overlap").SpeakerIds.Length == 1,
+        "A reviewed speaker merge did not update the stable diarization mapping.");
+    await Throws<ArgumentException>(() => Task.FromResult(DiarizationPlanner.Plan(project,
+        submission with { Turns = [new("outside", -1, 100)] })));
+});
+
 await Check("Speaker corrections and voice previews are revisioned and reversible", async () =>
 {
     var path = Path.Combine(testRoot, "voice-project.json");
@@ -389,6 +431,8 @@ if (args.Contains("--media", StringComparer.Ordinal))
             Revision = 1,
             Speech = [],
             Transcription = null,
+            Diarization = new("speech-source", speechProject.Assets.Single(asset => asset.Id == "speech-source").Sha256,
+                "stale-fixture", "stale-v1", new string('d', 64), [new("cluster", "speaker-1")], 1),
             Voices = [],
             Replacements = [],
             Synthesis = [],
@@ -397,6 +441,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
         var saved = await new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg)
             .TranscribeLocalAsync("speech-project.json", "speech-source", 1, transcriber, chunkSeconds: 5);
         Assert(saved.Revision == 2 && saved.Speech.Length == 3 && saved.Transcription is { Provider: "test-local", ChunkSeconds: 5 } &&
+            saved.Diarization is null &&
             saved.Captions is { SourceKind: "local-stt", Selection: "recommended" } &&
             File.Exists(Path.Combine(testRoot, saved.Captions.SourcePath.Replace('/', Path.DirectorySeparatorChar))),
             "Local STT results were not persisted with portable caption/provenance data.");
@@ -503,6 +548,25 @@ if (args.Contains("--media", StringComparer.Ordinal))
             var analysisApplied = await store.LoadAsync(projectPath);
             Assert(analysisApplied.Revision == 5 && analysisApplied.Proposals.Length == 0 && analysisApplied.Timeline.Length == 2,
                 "CLI did not apply the explicitly reviewed proposal.");
+
+            var diarizationProjectPath = Path.Combine(testRoot, "cli-diarization-project.json");
+            await store.SaveAsync(diarizationProjectPath, new EditProject
+            {
+                ProjectId = "cli-diarization",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "synthetic clip.mkv", await MediaReader.FingerprintAsync(source), 2000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 2000)],
+                Speech = [new("speech-1", "source", 0, 1000, "First", [], "unknown"),
+                    new("speech-2", "source", 1000, 2000, "Second", [], "unknown")]
+            }, 0);
+            var diarizationSubmission = Path.Combine(testRoot, "cli-diarization.json");
+            await File.WriteAllTextAsync(diarizationSubmission,
+                """{"assetId":"source","provider":"fixture-diarizer","model":"labelled-v1","turns":[{"speakerKey":"a","start":0,"end":1000},{"speakerKey":"b","start":1000,"end":2000}]}""");
+            var diarized = await RunCli("diarization-save", diarizationProjectPath, diarizationSubmission, "1");
+            var diarizationPlan = JsonSerializer.Deserialize(diarized.Output, ProjectJson.Default.DiarizationPlanResult)!;
+            Assert(diarizationPlan.InferredSegments == 2 && diarizationPlan.Project.Speakers.Length == 2 &&
+                diarizationPlan.Project.Diarization is { Provider: "fixture-diarizer" },
+                "CLI did not persist stable inferred speaker assignments.");
 
             var voiceProjectPath = Path.Combine(testRoot, "cli-voice-project.json");
             await store.SaveAsync(voiceProjectPath, new EditProject

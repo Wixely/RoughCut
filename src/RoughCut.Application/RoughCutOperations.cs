@@ -73,6 +73,42 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return edited;
     }
 
+    public async Task<DiarizationPlanResult> SaveDiarizationAsync(string projectPath, long expectedRevision,
+        DiarizationSubmission submission, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var asset = project.Assets.SingleOrDefault(item => item.Id == submission.AssetId && item.Kind is "video" or "audio")
+            ?? throw new KeyNotFoundException("Diarization asset was not found in the project.");
+        var source = ProjectFiles.Resolve(path, asset.Path);
+        if (!string.Equals(await MediaReader.FingerprintAsync(source, token), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Diarization source fingerprint differs from the project.");
+        var result = DiarizationPlanner.Plan(project, submission);
+        if (!string.Equals(await MediaReader.FingerprintAsync(source, token), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Diarization source changed while speaker assignments were prepared.");
+        await _store.SaveAsync(path, result.Project, expectedRevision, token);
+        return result;
+    }
+
+    public async Task<DiarizationPlanResult> DiarizeAsync(string projectPath, string assetId, long expectedRevision,
+        ISpeakerDiarizer diarizer, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var asset = project.Assets.SingleOrDefault(item => item.Id == assetId && item.Kind is "video" or "audio")
+            ?? throw new KeyNotFoundException("Diarization asset was not found in the project.");
+        var source = ProjectFiles.Resolve(path, asset.Path);
+        if (!string.Equals(await MediaReader.FingerprintAsync(source, token), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Diarization source fingerprint differs from the project.");
+        var submission = await diarizer.DiarizeAsync(project, assetId, source, token);
+        token.ThrowIfCancellationRequested();
+        if (submission.AssetId != assetId)
+            throw new InvalidDataException("Diarization provider returned a different asset ID.");
+        return await SaveDiarizationAsync(projectPath, expectedRevision, submission, token);
+    }
+
     public async Task<EditProject> PlanVoiceAsync(string projectPath, long expectedRevision,
         VoicePlanSubmission submission, CancellationToken token = default)
     {
@@ -296,6 +332,7 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
             Revision = checked(expectedRevision + 1),
             Speech = [.. project.Speech.Where(segment => segment.AssetId != assetId), .. report.Segments],
             Transcription = new(assetId, asset.Sha256, report.Provider, report.Model, report.Language, chunkSeconds),
+            Diarization = project.Diarization?.AssetId == assetId ? null : project.Diarization,
             Captions = new(assetId, relative, hash, new(1, 1000), cues, "local-stt", report.Language,
                 "recommended", $"{report.Provider}:{report.Model}", coverage)
         };

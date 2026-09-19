@@ -9,6 +9,7 @@ public static class SpeakerEditor
         var speech = project.Speech.ToList();
         var voices = project.Voices.ToList();
         var corrections = project.SpeakerCorrections.ToList();
+        var diarization = project.Diarization;
         var revision = checked(project.Revision + 1);
 
         for (var index = 0; index < edits.Length; index++)
@@ -90,6 +91,12 @@ public static class SpeakerEditor
                         voices[voiceIndex] = sourceVoice with { SpeakerId = targetSpeaker.Id };
                     }
                     speakers.Remove(sourceSpeaker);
+                    if (diarization is not null)
+                        diarization = diarization with
+                        {
+                            Speakers = diarization.Speakers.Select(item => item.SpeakerId == sourceSpeaker.Id
+                                ? item with { SpeakerId = targetSpeaker.Id } : item).ToArray()
+                        };
                     corrections.Add(new(correctionId, "merge", [.. affected], [sourceSpeaker.Id], [targetSpeaker.Id],
                         sourceSpeaker.Label, targetSpeaker.Label, edit.Reason, revision));
                     break;
@@ -104,7 +111,8 @@ public static class SpeakerEditor
             Speakers = [.. speakers],
             Speech = [.. speech],
             Voices = [.. voices],
-            SpeakerCorrections = [.. corrections]
+            SpeakerCorrections = [.. corrections],
+            Diarization = diarization
         };
         ProjectValidator.EnsureValid(edited);
         return edited;

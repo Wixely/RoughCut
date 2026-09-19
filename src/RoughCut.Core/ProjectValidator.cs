@@ -108,6 +108,24 @@ public static class ProjectValidator
                 !string.IsNullOrWhiteSpace(transcription.Language), "transcription", "Transcription provider, model and language are required.");
             Check(transcription.ChunkSeconds is >= 5 and <= 30, "transcription.chunkSeconds", "Transcription chunk size must be between 5 and 30 seconds.");
         }
+        if (project.Diarization is { } diarization)
+        {
+            Check(assets.TryGetValue(diarization.AssetId, out var sourceAsset) && sourceAsset.Kind is "video" or "audio",
+                "diarization.assetId", "Diarization provenance must reference timed media.");
+            Check(sourceAsset is not null && string.Equals(sourceAsset.Sha256, diarization.SourceSha256, StringComparison.OrdinalIgnoreCase),
+                "diarization.sourceSha256", "Diarization source fingerprint must match its asset.");
+            Check(!string.IsNullOrWhiteSpace(diarization.Provider) && diarization.Provider.Length <= 128 &&
+                !string.IsNullOrWhiteSpace(diarization.Model) && diarization.Model.Length <= 256,
+                "diarization", "Diarization provider and model are required and bounded.");
+            Check(diarization.SubmissionSha256.Length == 64 && diarization.SubmissionSha256.All(Uri.IsHexDigit),
+                "diarization.submissionSha256", "Diarization submission hash is invalid.");
+            Check(diarization.Revision > 0 && diarization.Revision <= project.Revision,
+                "diarization.revision", "Diarization revision is invalid.");
+            Check(diarization.Speakers.Length <= 1000 &&
+                diarization.Speakers.Select(item => item.Key).Distinct(StringComparer.Ordinal).Count() == diarization.Speakers.Length &&
+                diarization.Speakers.All(item => !string.IsNullOrWhiteSpace(item.Key) && item.Key.Length <= 128 && speakerIds.Contains(item.SpeakerId)),
+                "diarization.speakers", "Diarization speaker mappings must be unique, bounded and reference existing speakers.");
+        }
         Check(project.Evidence.Length <= 5000 && project.Observations.Length <= 2000 && project.Proposals.Length <= 5000,
             "analysis", "Analysis exceeds the bounded evidence, observation or proposal count.");
         var speechById = new Dictionary<string, SpeechSegment>(StringComparer.Ordinal);

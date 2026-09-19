@@ -38,6 +38,14 @@ public sealed record SpeakerCorrection(string Id, string Action, string[] Segmen
 public sealed record SpeechSegment(
     string Id, string AssetId, long Start, long End, string Text, string[] SpeakerIds,
     string Assignment = "unknown", bool Overlap = false);
+public sealed record DiarizationTurn(string SpeakerKey, long Start, long End);
+public sealed record DiarizationSubmission(string AssetId, string Provider, string Model,
+    DiarizationTurn[] Turns);
+public sealed record DiarizationSpeaker(string Key, string SpeakerId);
+public sealed record DiarizationProvenance(string AssetId, string SourceSha256, string Provider,
+    string Model, string SubmissionSha256, DiarizationSpeaker[] Speakers, long Revision);
+public sealed record DiarizationPlanResult(EditProject Project, int InferredSegments,
+    int UnknownSegments, int PreservedCorrections);
 public sealed record TranscriptionProvenance(string AssetId, string SourceSha256, string Provider,
     string Model, string Language, int ChunkSeconds);
 public sealed record AnalysisEvidence(string Id, string AssetId, long Start, long End, string Kind,
@@ -82,6 +90,7 @@ public sealed record EditProject
     public SpeakerCorrection[] SpeakerCorrections { get; init; } = [];
     public SpeechSegment[] Speech { get; init; } = [];
     public TranscriptionProvenance? Transcription { get; init; }
+    public DiarizationProvenance? Diarization { get; init; }
     public AnalysisEvidence[] Evidence { get; init; } = [];
     public AnalysisObservation[] Observations { get; init; } = [];
     public EditorialProposal[] Proposals { get; init; } = [];
@@ -114,6 +123,8 @@ public sealed record TimelineFrameInfo(
 [JsonSerializable(typeof(TimelineFrameInfo))]
 [JsonSerializable(typeof(EditOperation[]))]
 [JsonSerializable(typeof(SpeakerEdit[]))]
+[JsonSerializable(typeof(DiarizationSubmission))]
+[JsonSerializable(typeof(DiarizationPlanResult))]
 [JsonSerializable(typeof(VoiceMapping))]
 [JsonSerializable(typeof(VoiceReplacementRequest))]
 [JsonSerializable(typeof(VoicePlanSubmission))]

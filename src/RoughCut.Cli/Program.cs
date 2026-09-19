@@ -33,6 +33,7 @@ try
                   captions-select <project.json> <asset-id> <candidates.json> <expected-revision> <preferred-language> [override-candidate-id]
                   analyse <project.json> <submission.json> <expected-revision> <review|auto-high-certainty> <prompt>
                   analysis-apply <project.json> <expected-revision> [proposal-id ...]
+                  diarization-save <project.json> <submission.json> <expected-revision>
                   speaker-edit <project.json> <speaker-edits.json> <expected-revision>
                   voice-plan <project.json> <voice-plan.json> <expected-revision>
                   voice-preview-import <project.json> <replacement-id> <preview.wav> <expected-revision> <runtime>
@@ -139,6 +140,18 @@ try
                 var edited = await operations.ApplySpeakerEditsAsync(Path.GetFileName(fullProjectPath),
                     long.Parse(expected, CultureInfo.InvariantCulture), edits, token);
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["diarization-save", var path, var submissionPath, var expected]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var submission = JsonSerializer.Deserialize(
+                    await ProjectFiles.ReadBoundedAsync(submissionPath, ProjectStore.MaxDocumentBytes, token),
+                    ProjectJson.Default.DiarizationSubmission) ?? throw new InvalidDataException("Diarization submission cannot be null.");
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var result = await operations.SaveDiarizationAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), submission, token);
+                Console.WriteLine(JsonSerializer.Serialize(result, ProjectJson.Default.DiarizationPlanResult));
                 break;
             }
         case ["voice-plan", var path, var submissionPath, var expected]:

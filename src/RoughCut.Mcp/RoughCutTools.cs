@@ -108,6 +108,13 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
             () => operations.ApplySpeakerEditsAsync(projectPath, expectedRevision, edits, cancellationToken),
             ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_save_diarization")]
+    [Description("Validate and persist provider-neutral speaker turns, assign stable project speaker IDs to uncorrected transcript segments, preserve manual corrections, and record source/model provenance.")]
+    public Task<CallToolResult> SaveDiarizationAsync(string projectPath, long expectedRevision,
+        DiarizationSubmission submission, CancellationToken cancellationToken) => TextAsync(
+            () => operations.SaveDiarizationAsync(projectPath, expectedRevision, submission, cancellationToken),
+            ProjectJson.Default.DiarizationPlanResult);
+
     [McpServerTool(Name = "roughcut_plan_voice_replacement")]
     [Description("Create a Qwen TTS voice mapping and reversible exact or bounded time-stretch replacement request for corrected, non-overlapping isolated dialogue.")]
     public Task<CallToolResult> PlanVoiceReplacementAsync(string projectPath, long expectedRevision,

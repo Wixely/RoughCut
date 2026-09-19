@@ -30,11 +30,38 @@ internal static class McpTests
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
                 "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
                 "roughcut_save_analysis", "roughcut_apply_analysis",
-                "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
+                "roughcut_save_diarization", "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
                 "roughcut_synthesize_voice", "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
                 "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
+        });
+
+        await check("MCP persists diarization with stable inferred speaker IDs", async () =>
+        {
+            var source = Path.Combine(root, "export source.mkv");
+            var path = Path.Combine(root, "mcp-diarization-project.json");
+            await new ProjectStore().SaveAsync(path, new EditProject
+            {
+                ProjectId = "mcp-diarization",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "export source.mkv", await RoughCut.Media.MediaReader.FingerprintAsync(source), 4000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 4000)],
+                Speech = [new("speech-1", "source", 0, 1000, "First", [], "unknown"),
+                    new("speech-2", "source", 1000, 2000, "Second", [], "unknown")]
+            }, 0);
+            await using var client = await CreateClientAsync(command, arguments);
+            var result = await client.CallToolAsync("roughcut_save_diarization", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-diarization-project.json",
+                ["expectedRevision"] = 1L,
+                ["submission"] = JsonDocument.Parse("""{"assetId":"source","provider":"fixture-diarizer","model":"labelled-v1","turns":[{"speakerKey":"a","start":0,"end":1000},{"speakerKey":"b","start":1000,"end":2000}]}""").RootElement.Clone()
+            });
+            Assert(result.IsError != true, "MCP diarization persistence failed.");
+            using var response = JsonDocument.Parse(result.Content.OfType<TextContentBlock>().Single().Text);
+            Assert(response.RootElement.GetProperty("inferredSegments").GetInt32() == 2 &&
+                response.RootElement.GetProperty("project").GetProperty("diarization").GetProperty("speakers").GetArrayLength() == 2,
+                "MCP diarization did not return stable speaker mappings.");
         });
 
         await check("MCP corrects speakers and carries a reversible voice preview", async () =>
