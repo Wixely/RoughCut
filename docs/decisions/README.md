@@ -14,5 +14,6 @@
 | [0010](0010-loopback-qwen-provider.md) | 2026-09-19 | Accepted for bounded local MVP | Loopback-only Qwen synthesis through a measured WSL/CUDA service |
 | [0011](0011-bounded-voice-rendering.md) | 2026-09-19 | Accepted for bounded local MVP | Explicit 0.8x–1.25x fitting and sample-validated isolated-dialogue replacement export |
 | [0012](0012-stable-diarization-boundary.md) | 2026-09-19 | Accepted for bounded CLI/MCP foundation | Stable provider cluster mappings, correction preservation and explicit overlap/unknown assignments |
+| [0013](0013-local-sherpa-diarization.md) | 2026-09-19 | Accepted for bounded Windows MVP | Optional sherpa-onnx runtime behind dedicated CLI and MCP configuration |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

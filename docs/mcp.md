@@ -18,6 +18,8 @@ Set `ROUGHCUT_QWEN_ENDPOINT` to an absolute loopback service root to enable live
 
 Set `ROUGHCUT_STT_MODEL` to the verified base.en model path to enable local transcription. `ROUGHCUT_STT_LANGUAGE` defaults to `en`; `ROUGHCUT_STT_CHUNK_SECONDS` defaults to 30 and must be 5–30. Inference stays local, while the explicit speech CLI `model` command can download and verify the model beforehand.
 
+Set `ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL` and `ROUGHCUT_DIARIZATION_EMBEDDING_MODEL` to absolute local ONNX model paths to enable Sherpa diarization. `ROUGHCUT_DIARIZATION_SPEAKER_COUNT` defaults to `0` for threshold clustering; set a known count from 1 through 64 when available. `ROUGHCUT_DIARIZATION_THRESHOLD` defaults to `0.5`. Models and decoded audio stay local.
+
 The current tools are:
 
 | Tool | Behavior |
@@ -34,6 +36,7 @@ The current tools are:
 | `roughcut_save_analysis` | Validate and persist source-time evidence/observations, then create conservative revision-bound proposals |
 | `roughcut_apply_analysis` | Apply auto-approved removals or explicit reviewed proposal IDs against the exact proposal revision |
 | `roughcut_save_diarization` | Persist bounded provider turns, stable speaker mappings and inferred/overlap/unknown assignments while preserving corrections |
+| `roughcut_diarize_local` | Run configured local sherpa-onnx diarization and persist the result through the same stable assignment boundary |
 | `roughcut_edit_speakers` | Add, rename, assign or merge speaker labels with persisted correction history |
 | `roughcut_plan_voice_replacement` | Record a Qwen voice mapping and bounded replacement request |
 | `roughcut_import_voice_preview` | Import bounded PCM WAVE with synthesis provenance |
@@ -51,6 +54,6 @@ Incoming PNGs are capped at 8 MiB and 8K pixels, require valid chunk checksums, 
 
 Jobs are serialized atomically under `<workspace>/.roughcut/jobs`, retain at most 100 records and run exports one at a time. An interrupted `queued` or `running` checkpoint becomes `failed` when the next host starts; automatic resume is not claimed. Export staging cleanup and atomic bundle publication remain the export engine's responsibility.
 
-The executable protocol checks launch the host with the official MCP client, list all 24 tools, persist stable diarization assignments, synthesize through a loopback HTTP fixture, receive and decode source/timeline PNG and voice-preview WAVE content blocks, exercise reversible speaker/voice changes, assess captions, persist evidence-backed analysis, prove uncertain removals remain review-only, reject workspace escapes and stale revisions, verify actionable missing-model behavior for local STT, import/insert a PNG, complete an encoded image export, and cancel a separate durable export without publishing output. Live WSL/CUDA provider acceptance is recorded separately. The stdio host is a normal .NET deployment because both its reflection-based MCP schema and native Whisper loading have not been qualified for NativeAOT.
+The executable protocol checks launch the host with the official MCP client, list all 25 tools, persist stable diarization assignments, verify safe missing-configuration behavior for local Sherpa and Whisper, synthesize through a loopback HTTP fixture, receive and decode source/timeline PNG and voice-preview WAVE content blocks, exercise reversible speaker/voice changes, assess captions, persist evidence-backed analysis, prove uncertain removals remain review-only, reject workspace escapes and stale revisions, import/insert a PNG, complete an encoded image export, and cancel a separate durable export without publishing output. Live Sherpa and WSL/CUDA Qwen provider acceptance are recorded separately. The stdio host is a normal .NET deployment because its reflection-based MCP schema and native speech runtimes have not been qualified for NativeAOT.
 
 Analysis submissions are untrusted data. MCP callers supply provider/model identity, bounded source-time evidence and observations; RoughCut validates and maps them through the policy described in the [analysis guide](analysis.md). No MCP tool executes provider-generated commands or silently discloses media to another service.

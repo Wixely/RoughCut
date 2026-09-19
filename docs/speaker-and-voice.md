@@ -8,7 +8,7 @@ RoughCut keeps stable speaker IDs separate from display labels. A provider-neutr
 
 A revision-checked speaker edit batch can add or rename speakers, assign one or more speakers to transcript segments, or merge labels. Adding a speaker and assigning selected segments provides the split workflow. Every manual change records its action, affected segments, before/after IDs or labels, reason and project revision. Diarization stores source hash, provider, model, canonical submission hash, cluster mapping and revision independently of Qwen voice configuration.
 
-The current boundary accepts turns through `diarization-save` or `roughcut_save_diarization`; it does not yet run a model. `sherpa-onnx` 1.13.8 is the leading runtime candidate because its official C# API exposes offline Pyannote-segmentation and speaker-embedding clustering on Windows and Linux. Adoption remains gated on a labelled-fixture execution, model/license review, cancellation behavior and packaging evidence.
+The optional local provider runs `sherpa-onnx` 1.13.8 through the dedicated `roughcut-diarization` CLI or configured `roughcut_diarize_local` MCP tool. Whisper continues to produce transcript text and timestamps; Sherpa produces speaker turns that the stable boundary aligns to those transcript segments. The provider decodes bounded 16 kHz mono PCM with FFmpeg, supports a fixed speaker count or threshold clustering, fingerprints both external models and persists version/hash provenance without machine paths. The current source limit is ten minutes. FFmpeg and managed stages honor cancellation, while a native inference call already in progress returns before cancellation can be observed.
 
 The bounded voice workflow is deliberately reversible:
 
@@ -34,6 +34,7 @@ This establishes a local provider boundary, not a packaged RoughCut dependency. 
 
 ```powershell
 dotnet run --project src/RoughCut.Cli -- diarization-save project.json examples/diarization-submission.json 1
+dotnet run --project src/RoughCut.Diarization.Cli -- diarize project.json source-1 1 C:\models\segmentation.onnx C:\models\embedding.onnx 2
 dotnet run --project src/RoughCut.Cli -- speaker-edit project.json examples/speaker-edits.json 1
 dotnet run --project src/RoughCut.Cli -- voice-plan project.json examples/voice-plan.json 2
 $env:ROUGHCUT_QWEN_ENDPOINT = "http://127.0.0.1:8080/"
@@ -44,4 +45,4 @@ dotnet run --project src/RoughCut.Cli -- voice-state project.json 4 replacement-
 dotnet run --project src/RoughCut.Cli -- voice-state project.json 5 replacement-1 reverted
 ```
 
-Next owner/action: **Implementation agent: execute the sherpa-onnx candidate against labelled multi-speaker fixtures and measure assignment/overlap quality, cancellation and packaging; Wixely: provide representative multi-speaker and replacement examples.**
+The official 16-second two-speaker fixture and a published Windows x64 CLI both passed; see the [runtime evidence](evidence/2026-09-19-sherpa-diarization.md). Next owner/action: **Implementation agent: add process-isolated cancellation and measure speaker/overlap error on representative fixtures; Wixely: provide representative multi-speaker and replacement examples.**
