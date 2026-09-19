@@ -309,6 +309,24 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: diarize locally with Sherpa",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Diarization.Cli/bin/Debug/net10.0/roughcut-diarization.dll",
+      "args": [
+        "diarize",
+        "${input:projectPath}",
+        "${input:assetId}",
+        "${input:expectedRevision}",
+        "${input:diarizationSegmentationModel}",
+        "${input:diarizationEmbeddingModel}",
+        "${input:diarizationSpeakerCount}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: plan voice replacement",
       "type": "coreclr",
       "request": "launch",
@@ -546,6 +564,24 @@
       "type": "promptString",
       "description": "Provider-neutral diarization turn JSON",
       "default": "examples/diarization-submission.json"
+    },
+    {
+      "id": "diarizationSegmentationModel",
+      "type": "promptString",
+      "description": "Absolute path to the sherpa-onnx Pyannote segmentation model",
+      "default": "${workspaceFolder}/artifacts/sherpa-diarization/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx"
+    },
+    {
+      "id": "diarizationEmbeddingModel",
+      "type": "promptString",
+      "description": "Absolute path to the sherpa-onnx 3D-Speaker embedding model",
+      "default": "${workspaceFolder}/artifacts/sherpa-diarization/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+    },
+    {
+      "id": "diarizationSpeakerCount",
+      "type": "promptString",
+      "description": "Known speaker count; use 0 for threshold clustering",
+      "default": "2"
     },
     {
       "id": "voicePlanPath",

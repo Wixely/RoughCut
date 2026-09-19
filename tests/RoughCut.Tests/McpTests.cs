@@ -30,7 +30,7 @@ internal static class McpTests
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
                 "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
                 "roughcut_save_analysis", "roughcut_apply_analysis",
-                "roughcut_save_diarization", "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
+                "roughcut_save_diarization", "roughcut_diarize_local", "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
                 "roughcut_synthesize_voice", "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
                 "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
@@ -62,6 +62,33 @@ internal static class McpTests
             Assert(response.RootElement.GetProperty("inferredSegments").GetInt32() == 2 &&
                 response.RootElement.GetProperty("project").GetProperty("diarization").GetProperty("speakers").GetArrayLength() == 2,
                 "MCP diarization did not return stable speaker mappings.");
+        });
+
+        await check("MCP local diarization reports missing model configuration safely", async () =>
+        {
+            var priorSegmentation = Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL");
+            var priorEmbedding = Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_EMBEDDING_MODEL");
+            McpClient client;
+            Environment.SetEnvironmentVariable("ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL", null);
+            Environment.SetEnvironmentVariable("ROUGHCUT_DIARIZATION_EMBEDDING_MODEL", null);
+            try { client = await CreateClientAsync(command, arguments); }
+            finally
+            {
+                Environment.SetEnvironmentVariable("ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL", priorSegmentation);
+                Environment.SetEnvironmentVariable("ROUGHCUT_DIARIZATION_EMBEDDING_MODEL", priorEmbedding);
+            }
+            await using var configuredClient = client;
+            var result = await client.CallToolAsync("roughcut_diarize_local", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-diarization-project.json",
+                ["assetId"] = "source",
+                ["expectedRevision"] = 2L
+            });
+            Assert(result.IsError == true && result.Content.OfType<TextContentBlock>().Single().Text.Contains(
+                "ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL", StringComparison.Ordinal),
+                "MCP local diarization did not return actionable missing-model guidance.");
+            Assert((await new ProjectStore().LoadAsync(Path.Combine(root, "mcp-diarization-project.json"))).Revision == 2,
+                "Missing local diarization configuration changed the project.");
         });
 
         await check("MCP corrects speakers and carries a reversible voice preview", async () =>

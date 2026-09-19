@@ -5,12 +5,14 @@ using ModelContextProtocol.Server;
 using RoughCut.Application;
 using RoughCut.Core;
 using RoughCut.Speech.Whisper;
+using RoughCut.Speech.Sherpa;
 using RoughCut.Media;
 
 namespace RoughCut.Mcp;
 
 [McpServerToolType]
-public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManager jobs, SpeechSettings speech, QwenSettings qwen)
+public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManager jobs, SpeechSettings speech,
+    DiarizationSettings diarization, QwenSettings qwen)
 {
     [McpServerTool(Name = "roughcut_read_project", ReadOnly = true)]
     [Description("Read and validate a workspace-relative RoughCut project, including its current revision.")]
@@ -114,6 +116,25 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         DiarizationSubmission submission, CancellationToken cancellationToken) => TextAsync(
             () => operations.SaveDiarizationAsync(projectPath, expectedRevision, submission, cancellationToken),
             ProjectJson.Default.DiarizationPlanResult);
+
+    [McpServerTool(Name = "roughcut_diarize_local")]
+    [Description("Run configured local sherpa-onnx diarization for one workspace source, then persist stable speaker assignments and model/source provenance against the expected revision.")]
+    public async Task<CallToolResult> DiarizeLocalAsync(string projectPath, string assetId, long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(diarization.SegmentationModelPath) ||
+                string.IsNullOrWhiteSpace(diarization.EmbeddingModelPath))
+                throw new InvalidOperationException("Local diarization requires ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL and ROUGHCUT_DIARIZATION_EMBEDDING_MODEL on the MCP host.");
+            var provider = new SherpaSpeakerDiarizer(diarization.SegmentationModelPath,
+                diarization.EmbeddingModelPath, diarization.SpeakerCount, diarization.Threshold,
+                Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg");
+            var result = await operations.DiarizeAsync(projectPath, assetId, expectedRevision, provider, cancellationToken);
+            return new() { Content = [new TextContentBlock { Text = JsonSerializer.Serialize(result, ProjectJson.Default.DiarizationPlanResult) }] };
+        }
+        catch (Exception exception) { return Error(exception); }
+    }
 
     [McpServerTool(Name = "roughcut_plan_voice_replacement")]
     [Description("Create a Qwen TTS voice mapping and reversible exact or bounded time-stretch replacement request for corrected, non-overlapping isolated dialogue.")]

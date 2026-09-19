@@ -25,12 +25,21 @@ try
     var speechLanguage = Environment.GetEnvironmentVariable("ROUGHCUT_STT_LANGUAGE") ?? "en";
     var speechChunkSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_STT_CHUNK_SECONDS"), out var configuredChunk)
         ? configuredChunk : LocalSpeechProcessor.DefaultChunkSeconds;
+    var diarizationSpeakerCount = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_SPEAKER_COUNT"), out var configuredSpeakerCount)
+        ? configuredSpeakerCount : 0;
+    var diarizationThreshold = float.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_THRESHOLD"),
+        System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var configuredThreshold)
+        ? configuredThreshold : 0.5f;
     var qwenTimeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_TIMEOUT_SECONDS"), out var configuredQwenTimeout)
         ? configuredQwenTimeout : 600;
     builder.Services.AddSingleton(boundary);
     builder.Services.AddSingleton(new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp));
     builder.Services.AddSingleton(new ExportJobManager(boundary, ffmpeg, ffprobe));
     builder.Services.AddSingleton(new SpeechSettings(speechModel, speechLanguage, speechChunkSeconds));
+    builder.Services.AddSingleton(new DiarizationSettings(
+        Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL"),
+        Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_EMBEDDING_MODEL"),
+        diarizationSpeakerCount, diarizationThreshold));
     builder.Services.AddSingleton(new QwenSettings(Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT"),
         Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_API_KEY"), qwenTimeoutSeconds));
     var toolJson = new System.Text.Json.JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
