@@ -90,6 +90,54 @@ internal static class DesktopTests
             await commandCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         });
 
+        await check("Desktop crop dragging clamps moves and corner resizing", () =>
+        {
+            var start = new Crop(20, 10, 100, 60);
+            Assert(RoughCut.Desktop.CropDragGeometry.Update(start, RoughCut.Desktop.CropDragMode.Move,
+                    500, -500, 160, 96) == new Crop(60, 0, 100, 60),
+                "Moving the crop did not retain its size at the source boundary.");
+            Assert(RoughCut.Desktop.CropDragGeometry.Update(start, RoughCut.Desktop.CropDragMode.NorthWest,
+                    -500, 500, 160, 96) == new Crop(0, 69, 120, 1),
+                "North-west resizing did not clamp to a valid crop.");
+            Assert(RoughCut.Desktop.CropDragGeometry.Update(start, RoughCut.Desktop.CropDragMode.NorthEast,
+                    500, -500, 160, 96) == new Crop(20, 0, 140, 70),
+                "North-east resizing did not clamp to the frame.");
+            Assert(RoughCut.Desktop.CropDragGeometry.Update(start, RoughCut.Desktop.CropDragMode.SouthWest,
+                    500, 500, 160, 96) == new Crop(119, 10, 1, 86),
+                "South-west resizing did not retain a positive width.");
+            Assert(RoughCut.Desktop.CropDragGeometry.Update(start, RoughCut.Desktop.CropDragMode.SouthEast,
+                    500, 500, 160, 96) == new Crop(20, 10, 140, 86),
+                "South-east resizing did not clamp to the frame.");
+            return Task.CompletedTask;
+        });
+
+        await check("Desktop crop handle drag persists one revisioned edit", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-preview-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var revision = session.Project.Revision;
+            var start = session.Project.Timeline.Single().Crop ?? throw new Exception("Expected the prior crop edit.");
+            using var document = new RoughCut.Desktop.RoughCutReviewApp(session).CreateDocument();
+            document.Refresh();
+            using var debug = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+            var box = FindBox(debug.RootElement.GetProperty("tree"), "crop-handle se");
+            var x = box[0] + box[2] / 2;
+            var y = box[1] + box[3] / 2;
+            Assert(document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Down, x, y),
+                "The south-east crop handle did not capture the pointer.");
+            Assert(document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Move, x - 15, y - 8) &&
+                document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Up, x - 15, y - 8),
+                "The captured crop drag was not handled through release.");
+            var expected = new Crop(start.X, start.Y, start.Width - 10, start.Height - 5);
+            var timeout = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (session.Preview?.Info.Crop != expected && DateTime.UtcNow < timeout) await Task.Delay(25);
+            var saved = await new ProjectStore().LoadAsync(projectPath);
+            Assert(saved.Revision == revision + 1 && saved.Timeline.Single().Crop == expected &&
+                session.Preview?.Info.Crop == expected && session.CanUndo,
+                "The crop handle did not persist exactly one revisioned edit and refresh its preview.");
+        });
+
         await check("Desktop playback proxy decodes with bounded audio drift", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-preview-project.json");
@@ -102,5 +150,16 @@ internal static class DesktopTests
                 output.Contains("0 underruns", StringComparison.Ordinal),
                 "Desktop playback did not report decoded synchronized video and audio.");
         });
+    }
+
+    private static float[] FindBox(System.Text.Json.JsonElement node, string cssClass)
+    {
+        if (node.TryGetProperty("class", out var className) && className.GetString() == cssClass)
+            return node.GetProperty("box").EnumerateArray().Select(item => item.GetSingle()).ToArray();
+        if (node.TryGetProperty("children", out var children))
+            foreach (var child in children.EnumerateArray())
+                try { return FindBox(child, cssClass); }
+                catch (KeyNotFoundException) { }
+        throw new KeyNotFoundException($"Rendered node with class '{cssClass}' was not found.");
     }
 }

@@ -15,6 +15,10 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
     private CupriDocument? _document;
     private CancellationTokenSource? _playbackCancellation;
     private long _playbackGeneration;
+    private CropDragState? _cropDrag;
+
+    private sealed record CropDragState(CropDragMode Mode, Crop Start, float PointerX, float PointerY,
+        int SourceWidth, int SourceHeight, double Scale);
 
     public override string Title => "RoughCut Review";
     public override int Width => 1280;
@@ -29,6 +33,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
     {
         _document = document;
         Rebuild();
+        document.Refresh();
         document.OnClick(".speech-row", e => StartLatest(token =>
             session.SelectSegmentAsync(Required(e, "data-id"), token), seekAfter: true));
         document.OnClick(".evidence-row", e => StartLatest(token =>
@@ -46,6 +51,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         document.OnClick(".undo", _ => StartCommand(() => UndoRedoAsync(redo: false), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".redo", _ => StartCommand(() => UndoRedoAsync(redo: true), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
+        document.OnPointer("data-crop-drag", HandleCropPointer);
         if (session.Preview is null)
             StartLatest(session.InitializePreviewAsync, seekAfter: true, startPlaybackAfter: playback is not null);
         else if (playback is not null)
@@ -166,6 +172,86 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         if (exception is null && seekAfter) playback?.Seek(session.SelectedTimelineSeconds);
     }
 
+    private bool HandleCropPointer(MultiPointerEvent pointer)
+    {
+        if (pointer.Phase == PointerPhase.Down)
+        {
+            if (_work.IsBusy || _cropDrag is not null || pointer.Pointers.Count != 1 ||
+                !TryCropContext(out var asset, out var initialCrop) || !TryDragMode(pointer.Value, out var mode))
+                return false;
+            var scale = Math.Min(320d / asset.Width, 150d / asset.Height);
+            _cropDrag = new(mode, initialCrop, pointer.X, pointer.Y, asset.Width, asset.Height, scale);
+            _model.Status = "Drag the crop and release to save.";
+            return true;
+        }
+
+        if (_cropDrag is not { } drag) return true;
+        if (pointer.Phase == PointerPhase.Cancel)
+        {
+            SetPendingCrop(drag.Start);
+            _cropDrag = null;
+            _model.Status = "Crop drag canceled.";
+            return true;
+        }
+
+        var deltaX = (int)Math.Round((pointer.X - drag.PointerX) / drag.Scale,
+            MidpointRounding.AwayFromZero);
+        var deltaY = (int)Math.Round((pointer.Y - drag.PointerY) / drag.Scale,
+            MidpointRounding.AwayFromZero);
+        var crop = CropDragGeometry.Update(drag.Start, drag.Mode, deltaX, deltaY,
+            drag.SourceWidth, drag.SourceHeight);
+        SetPendingCrop(crop);
+        if (pointer.Phase == PointerPhase.Up)
+        {
+            _cropDrag = null;
+            if (crop == drag.Start)
+                _model.Status = "Ready";
+            else
+                StartCommand(() => session.ApplyCropAsync(crop), seekAfter: true, rebuildPlayback: true);
+        }
+        return true;
+    }
+
+    private bool TryCropContext(out MediaAsset asset, out Crop crop)
+    {
+        var project = session.Project;
+        var clip = session.SelectedClipId is null ? null :
+            project.Timeline.FirstOrDefault(item => item.Id == session.SelectedClipId);
+        asset = clip is null ? null! : project.Assets.FirstOrDefault(item => item.Id == clip.AssetId)!;
+        if (clip is null || asset is null || asset.Kind != "video")
+        {
+            crop = null!;
+            return false;
+        }
+        crop = clip.Crop ?? new(0, 0, asset.Width, asset.Height);
+        return true;
+    }
+
+    private void SetPendingCrop(Crop crop)
+    {
+        if (!TryCropContext(out var asset, out _)) return;
+        _model.CropX = crop.X.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropY = crop.Y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropWidth = crop.Width.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropHeight = crop.Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropBoxStyle = CropBoxStyle(crop, asset);
+        _model.Crop = $"Pending crop x={crop.X}, y={crop.Y}, {crop.Width}×{crop.Height}";
+    }
+
+    private static bool TryDragMode(string value, out CropDragMode mode)
+    {
+        mode = value switch
+        {
+            "move" => CropDragMode.Move,
+            "nw" => CropDragMode.NorthWest,
+            "ne" => CropDragMode.NorthEast,
+            "sw" => CropDragMode.SouthWest,
+            "se" => CropDragMode.SouthEast,
+            _ => (CropDragMode)(-1)
+        };
+        return (int)mode >= 0;
+    }
+
     private void Rebuild(bool preserveStatus = false)
     {
         var project = session.Project;
@@ -276,7 +362,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
               <aside class="review-panel">
                 <div class="crop-editor {{CropEditorClass}}">
                   <div class="section-title">Crop selected clip</div>
-                  <div class="crop-canvas" style="{{CropCanvasStyle}}"><cupri-image src="{{SourcePreviewDataUri}}" fit="fill" alt="Uncropped source frame"></cupri-image><div class="crop-box" style="{{CropBoxStyle}}"></div></div>
+                  <div class="crop-canvas" style="{{CropCanvasStyle}}"><cupri-image src="{{SourcePreviewDataUri}}" fit="fill" alt="Uncropped source frame"></cupri-image><div class="crop-box" data-crop-drag="move" style="{{CropBoxStyle}}"><span class="crop-handle nw" data-crop-drag="nw"></span><span class="crop-handle ne" data-crop-drag="ne"></span><span class="crop-handle sw" data-crop-drag="sw"></span><span class="crop-handle se" data-crop-drag="se"></span></div></div>
                   <div class="crop-fields"><label><span>X</span><cupri-textfield value="{{CropX}}"></cupri-textfield></label><label><span>Y</span><cupri-textfield value="{{CropY}}"></cupri-textfield></label><label><span>W</span><cupri-textfield value="{{CropWidth}}"></cupri-textfield></label><label><span>H</span><cupri-textfield value="{{CropHeight}}"></cupri-textfield></label></div>
                   <div class="crop-actions"><cupri-button class="reset-crop" variant="ghost">Full frame</cupri-button><cupri-button class="apply-crop">Apply crop</cupri-button></div>
                 </div>
@@ -318,7 +404,10 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         .review-panel { min-height:0; display:flex; flex-direction:column; overflow:hidden; }
         .crop-editor { padding-bottom:10px; border-bottom:1px solid var(--line); } .crop-editor.hidden { display:none; }
         .crop-canvas { position:relative; margin:0 auto 8px; background:#05070b; overflow:hidden; }
-        .crop-canvas cupri-image { width:100%; height:100%; } .crop-box { position:absolute; box-sizing:border-box; border:2px solid var(--accent); background:#ff9f4322; }
+        .crop-canvas cupri-image { width:100%; height:100%; } .crop-box { position:absolute; box-sizing:border-box; border:2px solid var(--accent); background:#ff9f4322; cursor:move; }
+        .crop-handle { position:absolute; width:12px; height:12px; border:2px solid #fff; border-radius:50%; background:var(--accent); box-sizing:border-box; }
+        .crop-handle.nw { left:-7px; top:-7px; cursor:nwse-resize; } .crop-handle.ne { right:-7px; top:-7px; cursor:nesw-resize; }
+        .crop-handle.sw { left:-7px; bottom:-7px; cursor:nesw-resize; } .crop-handle.se { right:-7px; bottom:-7px; cursor:nwse-resize; }
         .crop-fields { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; padding:0 12px; } .crop-fields label span { display:block; color:var(--muted); font-size:9px; margin-bottom:2px; }
         .crop-actions { display:flex; justify-content:flex-end; gap:6px; padding:8px 12px 0; }
         .speaker-row { display:grid; grid-template-columns:18px 1fr auto; gap:8px; align-items:center; padding:8px 14px; background:transparent; border-left:3px solid transparent; }

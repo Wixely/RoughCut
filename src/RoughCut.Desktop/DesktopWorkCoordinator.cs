@@ -8,6 +8,11 @@ public sealed class DesktopWorkCoordinator
     private long _generation;
     private bool _commandActive;
 
+    public bool IsBusy
+    {
+        get { lock (_sync) return _commandActive || _selection is not null; }
+    }
+
     public bool StartLatest(Func<CancellationToken, Task> action, Action<Exception?> completed)
     {
         CancellationTokenSource cancellation;
