@@ -273,6 +273,36 @@ await Check("Speaker corrections and voice previews are revisioned and reversibl
     await Throws<RevisionConflictException>(() => operations.SetVoiceStateAsync(Path.GetFileName(path), 5, "replace-1", "applied"));
 });
 
+await Check("Loopback Qwen client validates service identity and returns bounded WAVE", async () =>
+{
+    using var server = new TestQwenServer(TestAudio.PcmWave());
+    using var client = new QwenSpeechClient(server.Endpoint);
+    var output = await client.SynthesizeAsync(
+        new("voice", "speaker", "qwen-tts", "aiden", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "English"),
+        "Replacement text");
+    Assert(output.Wav.SequenceEqual(TestAudio.PcmWave()) && output.Runtime == "faster-qwen-tts-aio@0.1.0-fixture" &&
+        server.StatusRequests == 1 && server.SynthesisRequests == 1, "Qwen client request, response or runtime provenance is wrong.");
+    await Throws<ArgumentException>(() => Task.Run(() => new QwenSpeechClient("https://example.test/")));
+    using var unloadedServer = new TestQwenServer(TestAudio.PcmWave(), customModelLoaded: false);
+    using var unloadedClient = new QwenSpeechClient(unloadedServer.Endpoint);
+    await Throws<InvalidOperationException>(() => unloadedClient.SynthesizeAsync(
+        new("voice", "speaker", "qwen-tts", "aiden", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "English"),
+        "Replacement text"));
+});
+
+await Check("Loopback Qwen synthesis honors cancellation and timeout", async () =>
+{
+    var mapping = new VoiceMapping("voice", "speaker", "qwen-tts", "aiden",
+        "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "English");
+    using (var cancellationServer = new TestQwenServer(TestAudio.PcmWave(), TimeSpan.FromSeconds(5)))
+    using (var client = new QwenSpeechClient(cancellationServer.Endpoint))
+    using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        await Throws<OperationCanceledException>(() => client.SynthesizeAsync(mapping, "Replacement text", cancellation.Token));
+    using var timeoutServer = new TestQwenServer(TestAudio.PcmWave(), TimeSpan.FromSeconds(5));
+    using var timeoutClient = new QwenSpeechClient(timeoutServer.Endpoint, timeout: TimeSpan.FromMilliseconds(100));
+    await Throws<TimeoutException>(() => timeoutClient.SynthesizeAsync(mapping, "Replacement text"));
+});
+
 if (args.Contains("--media", StringComparer.Ordinal))
 {
     var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
@@ -469,9 +499,12 @@ if (args.Contains("--media", StringComparer.Ordinal))
             var voicePlan = Path.Combine(testRoot, "cli-voice-plan.json");
             await File.WriteAllTextAsync(voicePlan, """{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"exact","backgroundPolicy":"require-isolated-dialogue"}}""");
             await RunCli("voice-plan", voiceProjectPath, voicePlan, "2");
-            var wavPath = Path.Combine(testRoot, "qwen-preview.wav");
-            await File.WriteAllBytesAsync(wavPath, TestAudio.PcmWave());
-            await RunCli("voice-preview-import", voiceProjectPath, "replacement-1", wavPath, "3", "fixture-qwen-runtime");
+            using var qwenServer = new TestQwenServer(TestAudio.PcmWave());
+            var previousQwenEndpoint = Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT");
+            Environment.SetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT", qwenServer.Endpoint);
+            try { await RunCli("voice-synthesize", voiceProjectPath, "3", "replacement-1"); }
+            finally { Environment.SetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT", previousQwenEndpoint); }
+            Assert(qwenServer.StatusRequests == 1 && qwenServer.SynthesisRequests == 1, "CLI did not use the configured Qwen endpoint.");
             var previewPath = Path.Combine(testRoot, "cli-preview.wav");
             await RunCli("voice-preview", voiceProjectPath, "4", "replacement-1", previewPath);
             Assert((await File.ReadAllBytesAsync(previewPath)).SequenceEqual(TestAudio.PcmWave()), "CLI voice preview bytes changed.");

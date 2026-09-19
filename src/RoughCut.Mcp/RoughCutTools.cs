@@ -10,7 +10,7 @@ using RoughCut.Media;
 namespace RoughCut.Mcp;
 
 [McpServerToolType]
-public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManager jobs, SpeechSettings speech)
+public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManager jobs, SpeechSettings speech, QwenSettings qwen)
 {
     [McpServerTool(Name = "roughcut_read_project", ReadOnly = true)]
     [Description("Read and validate a workspace-relative RoughCut project, including its current revision.")]
@@ -122,6 +122,23 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
             () => operations.ImportVoicePreviewAsync(projectPath, expectedRevision, replacementId, base64Wav, runtime, cancellationToken),
             ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_synthesize_voice")]
+    [Description("Call the configured loopback Qwen TTS service for a requested replacement, validate bounded PCM WAVE output, and persist a revision-safe preview with runtime provenance.")]
+    public async Task<CallToolResult> SynthesizeVoiceAsync(string projectPath, long expectedRevision,
+        string replacementId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(qwen.Endpoint))
+                throw new InvalidOperationException("Live Qwen synthesis requires ROUGHCUT_QWEN_ENDPOINT on the MCP host.");
+            using var synthesizer = new QwenSpeechClient(qwen.Endpoint, qwen.ApiKey, TimeSpan.FromSeconds(qwen.TimeoutSeconds));
+            var project = await operations.SynthesizeVoiceAsync(projectPath, expectedRevision,
+                replacementId, synthesizer, cancellationToken);
+            return new() { Content = [new TextContentBlock { Text = JsonSerializer.Serialize(project, ProjectJson.Default.EditProject) }] };
+        }
+        catch (Exception exception) { return Error(exception); }
+    }
+
     [McpServerTool(Name = "roughcut_get_voice_preview", ReadOnly = true)]
     [Description("Return generated voice preview audio and exact requested/actual duration metadata for an expected project revision.")]
     public async Task<CallToolResult> GetVoicePreviewAsync(string projectPath, long expectedRevision,
@@ -226,7 +243,7 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         RevisionConflictException => "Project revision conflict; reload the project and retry against its current revision.",
         ExportRejectedException rejected => "Export rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
         IOException or ArgumentException or JsonException or NotSupportedException or KeyNotFoundException or
-        InvalidOperationException or OverflowException => exception.Message,
+        InvalidOperationException or OverflowException or HttpRequestException or TimeoutException => exception.Message,
         OperationCanceledException => "Operation cancelled.",
         _ => "Operation failed; check workspace inputs and media-tool availability."
     };

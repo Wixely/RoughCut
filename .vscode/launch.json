@@ -329,6 +329,17 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: synthesize voice with Qwen",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-synthesize", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}"],
+      "env": { "ROUGHCUT_QWEN_ENDPOINT": "${input:qwenEndpoint}" },
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: apply voice preview",
       "type": "coreclr",
       "request": "launch",
@@ -549,6 +560,12 @@
       "type": "promptString",
       "description": "Exact Qwen runtime and version that generated the WAVE",
       "default": "faster-qwen3-tts@0.2.6"
+    },
+    {
+      "id": "qwenEndpoint",
+      "type": "promptString",
+      "description": "Loopback URL for the local WSL Qwen service",
+      "default": "http://127.0.0.1:8080/"
     }
   ]
 }

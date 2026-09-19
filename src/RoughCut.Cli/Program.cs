@@ -36,6 +36,7 @@ try
                   speaker-edit <project.json> <speaker-edits.json> <expected-revision>
                   voice-plan <project.json> <voice-plan.json> <expected-revision>
                   voice-preview-import <project.json> <replacement-id> <preview.wav> <expected-revision> <runtime>
+                  voice-synthesize <project.json> <expected-revision> <replacement-id>
                   voice-preview <project.json> <expected-revision> <replacement-id> <new-output.wav>
                   voice-state <project.json> <expected-revision> <replacement-id> <applied|reverted>
                   acquire <url> <new-output-directory> [deno-executable]
@@ -182,6 +183,22 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(preview.Info, ProjectJson.Default.VoicePreviewInfo));
                 break;
             }
+        case ["voice-synthesize", var path, var expected, var replacementId]:
+            {
+                var endpoint = Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT");
+                if (string.IsNullOrWhiteSpace(endpoint))
+                    throw new InvalidOperationException("Live Qwen synthesis requires ROUGHCUT_QWEN_ENDPOINT, for example http://127.0.0.1:8080/.");
+                var timeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_TIMEOUT_SECONDS"), out var configuredTimeout)
+                    ? configuredTimeout : 600;
+                using var synthesizer = new QwenSpeechClient(endpoint,
+                    Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_API_KEY"), TimeSpan.FromSeconds(timeoutSeconds));
+                var fullProjectPath = Path.GetFullPath(path);
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var edited = await operations.SynthesizeVoiceAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), replacementId, synthesizer, token);
+                Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
         case ["voice-state", var path, var expected, var replacementId, var state]:
             {
                 var fullProjectPath = Path.GetFullPath(path);
@@ -287,7 +304,7 @@ catch (OperationCanceledException)
     return 130;
 }
 catch (Exception exception) when (exception is IOException or ArgumentException or JsonException or
-    NotSupportedException or RevisionConflictException or MediaToolException or OverflowException or
+    NotSupportedException or RevisionConflictException or MediaToolException or OverflowException or HttpRequestException or TimeoutException or
     FormatException or KeyNotFoundException or InvalidOperationException or System.ComponentModel.Win32Exception)
 {
     // Filesystem and tool diagnostics can contain private paths or media metadata.

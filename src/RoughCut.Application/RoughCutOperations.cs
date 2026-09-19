@@ -109,6 +109,22 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return result.Project;
     }
 
+    public async Task<EditProject> SynthesizeVoiceAsync(string projectPath, long expectedRevision,
+        string replacementId, IVoiceSynthesizer synthesizer, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var replacement = project.Replacements.SingleOrDefault(item => item.Id == replacementId)
+            ?? throw new KeyNotFoundException("Voice replacement was not found.");
+        if (replacement.State != "requested") throw new InvalidOperationException("Voice replacement already has a generated preview.");
+        var mapping = project.Voices.Single(item => item.Id == replacement.MappingId);
+        var output = await synthesizer.SynthesizeAsync(mapping, replacement.Text, token);
+        token.ThrowIfCancellationRequested();
+        return await ImportVoicePreviewAsync(projectPath, expectedRevision, replacementId,
+            Convert.ToBase64String(output.Wav), output.Runtime, token);
+    }
+
     public async Task<VoicePreviewAudio> GetVoicePreviewAsync(string projectPath, long expectedRevision,
         string replacementId, CancellationToken token = default)
     {

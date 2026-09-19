@@ -25,10 +25,14 @@ try
     var speechLanguage = Environment.GetEnvironmentVariable("ROUGHCUT_STT_LANGUAGE") ?? "en";
     var speechChunkSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_STT_CHUNK_SECONDS"), out var configuredChunk)
         ? configuredChunk : LocalSpeechProcessor.DefaultChunkSeconds;
+    var qwenTimeoutSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_TIMEOUT_SECONDS"), out var configuredQwenTimeout)
+        ? configuredQwenTimeout : 600;
     builder.Services.AddSingleton(boundary);
     builder.Services.AddSingleton(new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp));
     builder.Services.AddSingleton(new ExportJobManager(boundary, ffmpeg, ffprobe));
     builder.Services.AddSingleton(new SpeechSettings(speechModel, speechLanguage, speechChunkSeconds));
+    builder.Services.AddSingleton(new QwenSettings(Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT"),
+        Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_API_KEY"), qwenTimeoutSeconds));
     var toolJson = new System.Text.Json.JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
     toolJson.TypeInfoResolverChain.Insert(0, ProjectJson.Default);
     builder.Services.AddMcpServer().WithStdioServerTransport().WithTools<RoughCutTools>(toolJson);

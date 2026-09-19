@@ -31,7 +31,7 @@ internal static class McpTests
                 "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
                 "roughcut_save_analysis", "roughcut_apply_analysis",
                 "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
-                "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
+                "roughcut_synthesize_voice", "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
                 "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
@@ -50,7 +50,13 @@ internal static class McpTests
                 Speech = [new("speech-1", "source", 0, 1000, "Replacement text", ["speaker-1"], "corrected")]
             };
             await new ProjectStore().SaveAsync(path, project, 0);
-            await using var client = await CreateClientAsync(command, arguments);
+            using var qwenServer = new TestQwenServer(TestAudio.PcmWave());
+            var previousQwenEndpoint = Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT");
+            McpClient client;
+            Environment.SetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT", qwenServer.Endpoint);
+            try { client = await CreateClientAsync(command, arguments); }
+            finally { Environment.SetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT", previousQwenEndpoint); }
+            await using var configuredClient = client;
             var corrected = await client.CallToolAsync("roughcut_edit_speakers", new Dictionary<string, object?>
             {
                 ["projectPath"] = "mcp-voice-project.json",
@@ -65,15 +71,14 @@ internal static class McpTests
                 ["submission"] = JsonDocument.Parse("""{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"exact","backgroundPolicy":"require-isolated-dialogue"}}""").RootElement.Clone()
             });
             Assert(planned.IsError != true, "MCP voice plan failed.");
-            var imported = await client.CallToolAsync("roughcut_import_voice_preview", new Dictionary<string, object?>
+            var imported = await client.CallToolAsync("roughcut_synthesize_voice", new Dictionary<string, object?>
             {
                 ["projectPath"] = "mcp-voice-project.json",
                 ["expectedRevision"] = 3L,
-                ["replacementId"] = "replacement-1",
-                ["base64Wav"] = Convert.ToBase64String(TestAudio.PcmWave()),
-                ["runtime"] = "fixture-qwen-runtime"
+                ["replacementId"] = "replacement-1"
             });
-            Assert(imported.IsError != true, "MCP voice preview import failed.");
+            Assert(imported.IsError != true && qwenServer.StatusRequests == 1 && qwenServer.SynthesisRequests == 1,
+                "MCP live Qwen synthesis failed.");
             var preview = await client.CallToolAsync("roughcut_get_voice_preview", new Dictionary<string, object?>
             {
                 ["projectPath"] = "mcp-voice-project.json",
