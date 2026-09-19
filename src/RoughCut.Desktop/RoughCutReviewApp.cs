@@ -6,7 +6,7 @@ using SkiaSharp;
 
 namespace RoughCut.Desktop;
 
-public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
+public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlaybackController? playback = null) : CupriApp
 {
     private readonly ReviewModel _model = new();
     private CupriDocument? _document;
@@ -24,8 +24,8 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
     {
         _document = document;
         Rebuild();
-        document.OnClick(".speech-row", e => Run(() => session.SelectSegmentAsync(Required(e, "data-id"))));
-        document.OnClick(".evidence-row", e => Run(() => session.SelectEvidenceAsync(Required(e, "data-id"))));
+        document.OnClick(".speech-row", e => Run(() => session.SelectSegmentAsync(Required(e, "data-id")), seekAfter: true));
+        document.OnClick(".evidence-row", e => Run(() => session.SelectEvidenceAsync(Required(e, "data-id")), seekAfter: true));
         document.OnClick(".speaker-row", e =>
         {
             session.SelectSpeaker(Required(e, "data-id"));
@@ -35,10 +35,16 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
         document.OnClick(".save-label", _ => Run(() => session.RenameSelectedSpeakerAsync(_model.SelectedLabel)));
         document.OnClick(".undo", _ => Run(() => session.UndoAsync()));
         document.OnClick(".redo", _ => Run(() => session.RedoAsync()));
-        document.OnClick(".reload", _ => Run(() => session.ReloadAsync()));
+        document.OnClick(".reload", _ => Run(ReloadAsync, seekAfter: true));
     }
 
-    private void Run(Func<Task> action)
+    private async Task ReloadAsync()
+    {
+        await session.ReloadAsync();
+        await session.PreparePlaybackAsync();
+    }
+
+    private void Run(Func<Task> action, bool seekAfter = false)
     {
         try
         {
@@ -55,6 +61,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
         }
         Rebuild(preserveStatus: true);
         _document?.Refresh();
+        if (seekAfter) playback?.Seek(session.SelectedTimelineSeconds);
     }
 
     private void Rebuild(bool preserveStatus = false)
@@ -64,6 +71,8 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
         _model.Revision = project.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _model.PreviewDataUri = session.Preview is null ? "" :
             "data:image/png;base64," + Convert.ToBase64String(session.Preview.Png);
+        _model.PlaybackUri = session.Playback is null ? "" : new Uri(session.Playback.Path).AbsoluteUri;
+        _model.PlaybackStatus = session.PlaybackStatus;
         _model.Selection = session.Selection;
         _model.Crop = session.Crop;
         _model.Speakers = project.Speakers.Select(item => new SpeakerRow
@@ -118,8 +127,8 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
             <section class="workspace">
               <div class="stage-column">
                 <div class="preview-card">
-                  <div class="preview"><cupri-image src="{{PreviewDataUri}}" fit="contain" alt="Selected timeline frame"></cupri-image></div>
-                  <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span></div>
+                  <div class="preview"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="contain" controls label="Validated project timeline playback"></cupri-video></div>
+                  <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
                 </div>
                 <div class="timeline-card">
                   <div class="section-title">Timeline</div>
@@ -157,7 +166,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session) : CupriApp
         .preview-card,.timeline-card,.evidence-card,.review-panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
         .preview-card { min-height:350px; padding:12px; display:flex; flex-direction:column; }
         .preview { flex:1; min-height:300px; display:flex; align-items:center; justify-content:center; background:#05070b; border-radius:8px; overflow:hidden; }
-        .preview cupri-image { width:100%; height:100%; }
+        .preview cupri-video { width:100%; height:100%; }
         .preview-meta { padding:10px 4px 0; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; } .preview-meta strong { color:var(--text); }
         .section-title { padding:12px 14px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px; font-size:11px; font-weight:bold; }
         .timeline { display:flex; gap:6px; padding:0 12px 12px; overflow:hidden; }
@@ -186,6 +195,8 @@ public sealed partial class ReviewModel
     public string ProjectTitle { get; set; } = "";
     public string Revision { get; set; } = "";
     public string PreviewDataUri { get; set; } = "";
+    public string PlaybackUri { get; set; } = "";
+    public string PlaybackStatus { get; set; } = "";
     public string Selection { get; set; } = "";
     public string Crop { get; set; } = "";
     public string SelectedLabel { get; set; } = "";

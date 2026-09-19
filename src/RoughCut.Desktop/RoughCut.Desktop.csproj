@@ -7,6 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="../RoughCut.Application/RoughCut.Application.csproj" />
     <PackageReference Include="CupriFace" Version="0.26.1" />
+    <PackageReference Include="CupriFace.Media" Version="0.26.1" />
     <PackageReference Include="CupriFace.Shell" Version="0.26.1" />
   </ItemGroup>
 </Project>

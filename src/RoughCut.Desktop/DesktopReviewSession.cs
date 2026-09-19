@@ -23,10 +23,12 @@ public sealed class DesktopReviewSession
     public string ProjectPath { get; }
     public EditProject Project { get; private set; }
     public TimelineFrame? Preview { get; private set; }
+    public DesktopPlaybackProxy? Playback { get; private set; }
     public string? SelectedSegmentId { get; private set; }
     public string? SelectedSpeakerId { get; private set; }
     public string Selection { get; private set; } = "No frame selected";
     public string Crop { get; private set; } = "No active crop";
+    public string PlaybackStatus { get; private set; } = "Playback proxy has not been prepared";
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
 
@@ -45,6 +47,24 @@ public sealed class DesktopReviewSession
         else if (ProjectValidator.MapTimeline(Project).FirstOrDefault() is { } mapping)
             await SelectSourceAsync(mapping.AssetId, mapping.SourceIn, "Timeline start", token);
     }
+
+    public async Task PreparePlaybackAsync(CancellationToken token = default)
+    {
+        Playback = null;
+        PlaybackStatus = "Preparing synchronized playback…";
+        Playback = await new DesktopPlaybackProxyBuilder().PrepareAsync(ProjectPath, token);
+        PlaybackStatus = $"Synchronized WebM proxy · {Playback.Length / 1024d / 1024d:0.0} MiB";
+    }
+
+    public void PlaybackUnavailable(string message)
+    {
+        Playback = null;
+        PlaybackStatus = message;
+    }
+
+    public double SelectedTimelineSeconds => Preview is null ? 0 :
+        (double)Preview.Info.Actual.Ticks * Preview.Info.Actual.TimeBase.Numerator /
+        Preview.Info.Actual.TimeBase.Denominator;
 
     public async Task SelectSegmentAsync(string segmentId, CancellationToken token = default)
     {

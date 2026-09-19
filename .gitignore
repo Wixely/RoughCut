@@ -14,6 +14,7 @@
 /output/
 /logs/
 /local/
+**/.roughcut-preview/
 .env
 .env.*
 !.env.example

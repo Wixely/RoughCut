@@ -42,5 +42,18 @@ internal static class DesktopTests
                 System.Text.Encoding.UTF8.GetString(result.Output).Contains(output, StringComparison.OrdinalIgnoreCase),
                 "Desktop snapshot did not contain the expected rendered review surface.");
         });
+
+        await check("Desktop playback proxy decodes with bounded audio drift", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-preview-project.json");
+            var arguments = new[] { "probe-playback", projectPath, "1.0" };
+            var result = desktop.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                ? await ToolProcess.RunAsync("dotnet", new[] { desktop }.Concat(arguments), timeout: TimeSpan.FromMinutes(3))
+                : await ToolProcess.RunAsync(desktop, arguments, timeout: TimeSpan.FromMinutes(3));
+            var output = System.Text.Encoding.UTF8.GetString(result.Output);
+            Assert(output.Contains("playback ok:", StringComparison.Ordinal) &&
+                output.Contains("0 underruns", StringComparison.Ordinal),
+                "Desktop playback did not report decoded synchronized video and audio.");
+        });
     }
 }
