@@ -114,7 +114,13 @@ public static class TimelineEditor
                     break;
             }
         }
-        var result = project with { Revision = checked(project.Revision + 1), Timeline = clips.ToArray(), ExportMode = mode };
+        var result = project with
+        {
+            Revision = checked(project.Revision + 1),
+            Timeline = clips.ToArray(),
+            ExportMode = mode,
+            Proposals = []
+        };
         ProjectValidator.EnsureValid(result);
         return result;
     }

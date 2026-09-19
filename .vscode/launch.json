@@ -227,6 +227,37 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: save analysis proposals",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "analyse",
+        "${input:projectPath}",
+        "${input:analysisSubmissionPath}",
+        "${input:expectedRevision}",
+        "${input:analysisPolicy}",
+        "${input:analysisPrompt}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: apply automatic analysis decisions",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "analysis-apply",
+        "${input:projectPath}",
+        "${input:expectedRevision}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: transcribe locally",
       "type": "coreclr",
       "request": "launch",
@@ -407,6 +438,25 @@
       "type": "promptString",
       "description": "Bounded transcription chunk size (5-30 seconds)",
       "default": "30"
+    },
+    {
+      "id": "analysisSubmissionPath",
+      "type": "promptString",
+      "description": "Provider-neutral evidence and observation JSON",
+      "default": "examples/analysis-submission.json"
+    },
+    {
+      "id": "analysisPolicy",
+      "type": "pickString",
+      "description": "Editorial decision policy",
+      "options": ["review", "auto-high-certainty"],
+      "default": "review"
+    },
+    {
+      "id": "analysisPrompt",
+      "type": "promptString",
+      "description": "Editorial request",
+      "default": "Remove advertisements"
     },
     {
       "id": "exportDirectory",

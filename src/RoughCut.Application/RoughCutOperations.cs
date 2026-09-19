@@ -62,6 +62,51 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return edited;
     }
 
+    public async Task<AnalysisPlanResult> SaveAnalysisAsync(string projectPath, long expectedRevision,
+        string prompt, string policy, AnalysisSubmission submission, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var asset = project.Assets.SingleOrDefault(item => item.Id == submission.AssetId && item.Kind is "video" or "audio")
+            ?? throw new KeyNotFoundException("Analysis asset was not found in the project.");
+        var source = ProjectFiles.Resolve(path, asset.Path);
+        if (!string.Equals(await MediaReader.FingerprintAsync(source, token), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Analysis source fingerprint differs from the project.");
+        var result = AnalysisPlanner.Plan(project, submission, prompt, policy);
+        if (!string.Equals(await MediaReader.FingerprintAsync(source, token), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Analysis source changed while proposals were prepared.");
+        await _store.SaveAsync(path, result.Project, expectedRevision, token);
+        return result;
+    }
+
+    public async Task<AnalysisPlanResult> AnalyzeAsync(string projectPath, string assetId, long expectedRevision,
+        string prompt, string policy, IContentAnalyzer analyzer, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var asset = project.Assets.SingleOrDefault(item => item.Id == assetId && item.Kind is "video" or "audio")
+            ?? throw new KeyNotFoundException("Analysis asset was not found in the project.");
+        var source = ProjectFiles.Resolve(path, asset.Path);
+        if (!string.Equals(await MediaReader.FingerprintAsync(source, token), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Analysis source fingerprint differs from the project.");
+        var submission = await analyzer.AnalyzeAsync(project, assetId, prompt, token);
+        if (submission.AssetId != assetId) throw new InvalidDataException("Analysis provider changed the requested asset ID.");
+        return await SaveAnalysisAsync(projectPath, expectedRevision, prompt, policy, submission, token);
+    }
+
+    public async Task<EditProject> ApplyAnalysisAsync(string projectPath, long expectedRevision,
+        string[]? proposalIds = null, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var edited = AnalysisPlanner.Apply(project, proposalIds);
+        await _store.SaveAsync(path, edited, expectedRevision, token);
+        return edited;
+    }
+
     public async Task<EditProject> ImportCaptionsAsync(string projectPath, string assetId, string captionPath,
         long expectedRevision, CancellationToken token = default)
     {

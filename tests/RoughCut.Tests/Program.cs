@@ -175,6 +175,52 @@ await Check("yt-dlp acquisition is bounded, staged and strips URL secrets from p
     Assert(!Directory.Exists(Path.Combine(testRoot, "cancelled-acquisition")) &&
         !Directory.EnumerateDirectories(testRoot, ".roughcut-acquire-*").Any(), "Cancelled acquisition leaked staged output.");
 });
+await Check("Analysis proposals retain uncertainty and apply only revision-bound removals", async () =>
+{
+    var submission = new AnalysisSubmission("video", "fixture-agent", "labelled-v1",
+    [
+        new("evidence-ad", "video", 1200, 1600, "transcript", "A labelled sponsorship statement.", ["speech-1"], [1300]),
+        new("evidence-ad-overlap", "video", 1400, 1800, "metadata", "A labelled sponsor chapter overlaps the statement.", [], []),
+        new("evidence-uncertain", "video", 1700, 1900, "frame", "A possible transition with weak evidence.", [], [1800]),
+        new("evidence-topic", "video", 5200, 5600, "frame", "The requested main topic continues.", [], [5300])
+    ],
+    [
+        new("observation-ad", "video", 1200, 1600, "sponsorship", "Labelled advertisement fixture.", "high", "remove", ["evidence-ad"]),
+        new("observation-ad-overlap", "video", 1400, 1800, "sponsorship", "Overlapping labelled advertisement evidence.", "high", "remove", ["evidence-ad-overlap"]),
+        new("observation-uncertain", "video", 1700, 1900, "possible-ad", "Insufficient evidence for automatic removal.", "low", "remove", ["evidence-uncertain"]),
+        new("observation-topic", "video", 5200, 5600, "topic", "Requested content should be retained.", "high", "retain", ["evidence-topic"])
+    ]);
+    var review = AnalysisPlanner.Plan(Fixture(), submission, "Remove advertisements", "review");
+    Assert(review.RemoveDecisions == 0 && review.ReviewDecisions == 3 && review.RetainDecisions == 1,
+        "Review policy did not preserve removal decisions for review.");
+    var automatic = AnalysisPlanner.Plan(Fixture(), submission, "Remove advertisements", "auto-high-certainty");
+    Assert(automatic.RemoveDecisions == 2 && automatic.ReviewDecisions == 1 && automatic.RetainDecisions == 1 &&
+        automatic.Project.Analysis is { Provider: "fixture-agent", ProposalRevision: 2 },
+        "Automatic policy did not limit removal to high-certainty evidence.");
+    var applied = AnalysisPlanner.Apply(automatic.Project);
+    Assert(applied.Revision == 3 && applied.Proposals.Length == 0 &&
+        applied.Timeline.Any(clip => clip.Id == "earlier" && clip.In == 1000 && clip.Out == 1200) &&
+        applied.Timeline.Any(clip => clip.AssetId == "video" && clip.In == 1800 && clip.Out == 2000),
+        "Automatic proposal application did not merge overlapping removals or preserve surrounding material.");
+    var uncertainId = automatic.Project.Proposals.Single(item => item.ObservationId == "observation-uncertain").Id;
+    var explicitlyApplied = AnalysisPlanner.Apply(automatic.Project, [uncertainId]);
+    Assert(explicitlyApplied.Timeline.Any(clip => clip.In == 1000 && clip.Out == 1700) &&
+        explicitlyApplied.Timeline.Any(clip => clip.In == 1900 && clip.Out == 2000),
+        "Explicit reviewed removal did not apply the selected source interval.");
+    var manuallyEdited = TimelineEditor.Apply(automatic.Project, [new("trim", "later", In: 5200, Out: 7800)]);
+    Assert(manuallyEdited.Proposals.Length == 0, "A timeline edit did not invalidate prior proposals.");
+    await Throws<ProjectValidationException>(() => Task.FromResult(AnalysisPlanner.Plan(Fixture(),
+        submission with { Observations = [submission.Observations[0] with { EvidenceIds = ["missing"] }] },
+        "Remove advertisements", "review")));
+    var uncertainIndex = Array.FindIndex(automatic.Project.Proposals,
+        proposal => proposal.ObservationId == "observation-uncertain");
+    var tamperedProposals = automatic.Project.Proposals.ToArray();
+    tamperedProposals[uncertainIndex] = tamperedProposals[uncertainIndex] with { Decision = "remove" };
+    await Throws<ProjectValidationException>(() => Task.Run(() => ProjectValidator.EnsureValid(
+        automatic.Project with { Proposals = tamperedProposals })));
+    await Throws<RevisionConflictException>(() => Task.FromResult(AnalysisPlanner.Apply(
+        automatic.Project with { Revision = 3 })));
+});
 
 if (args.Contains("--media", StringComparer.Ordinal))
 {
@@ -186,6 +232,37 @@ if (args.Contains("--media", StringComparer.Ordinal))
         await ToolProcess.RunAsync(ffmpeg,
             ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=10:duration=2",
              "-c:v", "libx264", "-qp", "0", "-g", "20", "-threads", "1", "-an", "-y", source]);
+    });
+    await Check("Analysis persistence verifies source evidence and applies conservative decisions", async () =>
+    {
+        var info = await reader.InspectAsync(source);
+        var analysisPath = Path.Combine(testRoot, "analysis-project.json");
+        var analysisProject = new EditProject
+        {
+            ProjectId = "analysis-fixture",
+            TimeBase = info.TimeBase,
+            Assets = [new("source-1", "video", Path.GetFileName(source), info.Sha256, info.DurationTicks,
+                info.Width, info.Height, "video/x-matroska")],
+            Timeline = [new("clip-1", "source-1", 0, info.DurationTicks)]
+        };
+        await store.SaveAsync(analysisPath, analysisProject, 0);
+        var end = TimeMath.ExactTicks(new(700, new(1, 1000)), info.TimeBase);
+        var start = TimeMath.ExactTicks(new(300, new(1, 1000)), info.TimeBase);
+        var frame = TimeMath.ExactTicks(new(350, new(1, 1000)), info.TimeBase);
+        var submission = new AnalysisSubmission("source-1", "fixture-agent", "labelled-v1",
+            [new("frame-evidence", "source-1", start, end, "frame", "Labelled interruption.", [], [frame])],
+            [new("interruption", "source-1", start, end, "advertisement", "Remove labelled interruption.",
+                "high", "remove", ["frame-evidence"])]);
+        var operations = new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg);
+        var planned = await operations.SaveAnalysisAsync("analysis-project.json", 1, "Remove advertisements",
+            "auto-high-certainty", submission);
+        Assert(planned.Project.Revision == 2 && planned.RemoveDecisions == 1 && planned.Project.Proposals.Length == 1,
+            "Analysis plan was not persisted with an automatic high-certainty decision.");
+        var applied = await operations.ApplyAnalysisAsync("analysis-project.json", 2);
+        Assert(applied.Revision == 3 && applied.Proposals.Length == 0 && applied.Timeline.Length == 2 &&
+            applied.Timeline[0].In == 0 && applied.Timeline[0].Out == start &&
+            applied.Timeline[1].In == end && applied.Timeline[1].Out == info.DurationTicks,
+            "Persisted analysis decision did not remove exactly the labelled interval.");
     });
     await Check("Local speech processing chunks bounded PCM and preserves timed provenance", async () =>
     {
@@ -308,6 +385,21 @@ if (args.Contains("--media", StringComparer.Ordinal))
             var selected = await RunCli("captions-select", projectPath, "source-1", captionCandidates, "2", "en");
             var selection = JsonSerializer.Deserialize(selected.Output, ProjectJson.Default.CaptionSelectionResult)!;
             Assert(selection.SelectedId == "cli-manual" && selection.Project.Revision == 3, "CLI caption assessment failed.");
+            var analysisSubmission = Path.Combine(testRoot, "cli-analysis.json");
+            var submission = new AnalysisSubmission("source-1", "fixture-agent", "labelled-v1",
+                [new("cli-evidence", "source-1", 300, 700, "frame", "Labelled interruption.", [], [350])],
+                [new("cli-observation", "source-1", 300, 700, "advertisement", "Reviewed removal.",
+                    "medium", "remove", ["cli-evidence"])]);
+            await File.WriteAllTextAsync(analysisSubmission,
+                JsonSerializer.Serialize(submission, ProjectJson.Default.AnalysisSubmission));
+            var analysed = await RunCli("analyse", projectPath, analysisSubmission, "3", "review", "Remove advertisements");
+            var plan = JsonSerializer.Deserialize(analysed.Output, ProjectJson.Default.AnalysisPlanResult)!;
+            Assert(plan.Project.Revision == 4 && plan.RemoveDecisions == 0 && plan.ReviewDecisions == 1,
+                "CLI analysis did not retain a reviewed removal.");
+            await RunCli("analysis-apply", projectPath, "4", plan.Project.Proposals.Single().Id);
+            var analysisApplied = await store.LoadAsync(projectPath);
+            Assert(analysisApplied.Revision == 5 && analysisApplied.Proposals.Length == 0 && analysisApplied.Timeline.Length == 2,
+                "CLI did not apply the explicitly reviewed proposal.");
         });
     }
 }

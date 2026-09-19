@@ -1,0 +1,51 @@
+{
+  "assetId": "source-1",
+  "provider": "mcp-agent",
+  "model": "configured-model",
+  "evidence": [
+    {
+      "id": "evidence-sponsor-frame",
+      "assetId": "source-1",
+      "start": 2000,
+      "end": 4000,
+      "kind": "frame",
+      "summary": "A labelled fixture frame contains an embedded sponsor card.",
+      "speechSegmentIds": [],
+      "frameTicks": [2500]
+    },
+    {
+      "id": "evidence-main-topic",
+      "assetId": "source-1",
+      "start": 4000,
+      "end": 8000,
+      "kind": "transcript",
+      "summary": "The requested main topic resumes after the sponsor card.",
+      "speechSegmentIds": [],
+      "frameTicks": []
+    }
+  ],
+  "observations": [
+    {
+      "id": "observation-sponsor",
+      "assetId": "source-1",
+      "start": 2000,
+      "end": 4000,
+      "label": "sponsorship",
+      "summary": "Remove the labelled sponsor card from this fixture.",
+      "certainty": "high",
+      "recommendedAction": "remove",
+      "evidenceIds": ["evidence-sponsor-frame"]
+    },
+    {
+      "id": "observation-main-topic",
+      "assetId": "source-1",
+      "start": 4000,
+      "end": 8000,
+      "label": "topic",
+      "summary": "Retain the main topic.",
+      "certainty": "high",
+      "recommendedAction": "retain",
+      "evidenceIds": ["evidence-main-topic"]
+    }
+  ]
+}

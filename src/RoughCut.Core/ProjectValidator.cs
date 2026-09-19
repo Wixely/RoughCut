@@ -16,6 +16,8 @@ public static class ProjectValidator
         Check(project.ExportMode is "prefer-stream-copy" or "copy-only" or "exact-edit", "exportMode", "Unknown export mode.");
         if (project.Assets.Any(x => x is null) || project.Timeline.Any(x => x is null) ||
             project.Speakers.Any(x => x is null) || project.Speech.Any(x => x is null) ||
+            project.Evidence.Any(x => x is null) || project.Observations.Any(x => x is null) ||
+            project.Proposals.Any(x => x is null) ||
             project.Voices.Any(x => x is null) || project.Replacements.Any(x => x is null) ||
             project.Provenance.Any(x => x is null))
         {
@@ -89,6 +91,95 @@ public static class ProjectValidator
                 !string.IsNullOrWhiteSpace(transcription.Language), "transcription", "Transcription provider, model and language are required.");
             Check(transcription.ChunkSeconds is >= 5 and <= 30, "transcription.chunkSeconds", "Transcription chunk size must be between 5 and 30 seconds.");
         }
+        Check(project.Evidence.Length <= 5000 && project.Observations.Length <= 2000 && project.Proposals.Length <= 5000,
+            "analysis", "Analysis exceeds the bounded evidence, observation or proposal count.");
+        var speechById = new Dictionary<string, SpeechSegment>(StringComparer.Ordinal);
+        foreach (var segment in project.Speech) speechById.TryAdd(segment.Id, segment);
+        ids.Clear();
+        foreach (var evidence in project.Evidence)
+        {
+            Id(evidence.Id, "evidence.id");
+            Check(assets.TryGetValue(evidence.AssetId, out var asset) && asset.Kind is "video" or "audio" &&
+                evidence.Start >= 0 && evidence.End > evidence.Start && evidence.End <= asset.Duration,
+                evidence.Id, "Evidence interval must reference valid timed media.");
+            Check(evidence.Kind is "transcript" or "frame" or "chapter" or "activity" or "metadata",
+                evidence.Id, "Unknown evidence kind.");
+            Check(!string.IsNullOrWhiteSpace(evidence.Summary) && evidence.Summary.Length <= 2000,
+                evidence.Id, "Evidence summary must contain at most 2000 characters.");
+            Check(evidence.SpeechSegmentIds.Length <= 100 && evidence.SpeechSegmentIds.Distinct().Count() == evidence.SpeechSegmentIds.Length &&
+                evidence.SpeechSegmentIds.All(id => speechById.TryGetValue(id, out var segment) && segment.AssetId == evidence.AssetId),
+                evidence.Id, "Evidence speech references must be unique and belong to the same asset.");
+            Check(evidence.FrameTicks.Length <= 100 && evidence.FrameTicks.Distinct().Count() == evidence.FrameTicks.Length &&
+                evidence.FrameTicks.All(tick => tick >= evidence.Start && tick < evidence.End),
+                evidence.Id, "Evidence frame timestamps must be unique and fall inside the evidence interval.");
+        }
+        var evidenceById = new Dictionary<string, AnalysisEvidence>(StringComparer.Ordinal);
+        foreach (var evidence in project.Evidence) evidenceById.TryAdd(evidence.Id, evidence);
+        ids.Clear();
+        foreach (var observation in project.Observations)
+        {
+            Id(observation.Id, "observations.id");
+            Check(assets.TryGetValue(observation.AssetId, out var asset) && asset.Kind is "video" or "audio" &&
+                observation.Start >= 0 && observation.End > observation.Start && observation.End <= asset.Duration,
+                observation.Id, "Observation interval must reference valid timed media.");
+            Check(!string.IsNullOrWhiteSpace(observation.Label) && observation.Label.Length <= 128 &&
+                !string.IsNullOrWhiteSpace(observation.Summary) && observation.Summary.Length <= 2000,
+                observation.Id, "Observation label and summary are required and bounded.");
+            Check(observation.Certainty is "low" or "medium" or "high", observation.Id, "Unknown observation certainty.");
+            Check(observation.RecommendedAction is "retain" or "remove" or "review", observation.Id, "Unknown recommended action.");
+            Check(observation.EvidenceIds is { Length: > 0 and <= 100 } && observation.EvidenceIds.Distinct().Count() == observation.EvidenceIds.Length &&
+                observation.EvidenceIds.All(id => evidenceById.TryGetValue(id, out var evidence) && evidence.AssetId == observation.AssetId &&
+                    evidence.Start < observation.End && evidence.End > observation.Start),
+                observation.Id, "Observation evidence must be unique, overlap it and belong to the same asset.");
+        }
+        var observationById = new Dictionary<string, AnalysisObservation>(StringComparer.Ordinal);
+        foreach (var observation in project.Observations) observationById.TryAdd(observation.Id, observation);
+        var clipsById = new Dictionary<string, TimelineClip>(StringComparer.Ordinal);
+        foreach (var clip in project.Timeline) clipsById.TryAdd(clip.Id, clip);
+        ids.Clear();
+        foreach (var proposal in project.Proposals)
+        {
+            Id(proposal.Id, "proposals.id");
+            Check(observationById.TryGetValue(proposal.ObservationId, out var observation), proposal.Id, "Proposal must reference an observation.");
+            Check(clipsById.TryGetValue(proposal.ClipId, out var clip) && proposal.In >= clip.In && proposal.Out <= clip.Out && proposal.In < proposal.Out,
+                proposal.Id, "Proposal interval must fit its timeline clip.");
+            Check(proposal.RecommendedAction is "retain" or "remove" or "review" && proposal.Decision is "retain" or "remove" or "review",
+                proposal.Id, "Unknown proposal action or decision.");
+            Check(!string.IsNullOrWhiteSpace(proposal.Reason) && proposal.Reason.Length <= 2000 &&
+                proposal.Certainty is "low" or "medium" or "high", proposal.Id, "Proposal reason and certainty are required and bounded.");
+            Check(observation is not null && clip is not null && clip.AssetId == observation.AssetId &&
+                proposal.In >= observation.Start && proposal.Out <= observation.End &&
+                proposal.Certainty == observation.Certainty &&
+                proposal.RecommendedAction == observation.RecommendedAction &&
+                proposal.EvidenceIds.SequenceEqual(observation.EvidenceIds), proposal.Id, "Proposal must preserve its observation judgement and evidence.");
+        }
+        if (project.Analysis is { } analysis)
+        {
+            Check(assets.TryGetValue(analysis.AssetId, out var sourceAsset) && sourceAsset.Kind is "video" or "audio",
+                "analysis.assetId", "Analysis provenance must reference timed media.");
+            Check(sourceAsset is not null && string.Equals(sourceAsset.Sha256, analysis.SourceSha256, StringComparison.OrdinalIgnoreCase),
+                "analysis.sourceSha256", "Analysis source fingerprint must match its asset.");
+            Check(!string.IsNullOrWhiteSpace(analysis.Provider) && analysis.Provider.Length <= 128 &&
+                !string.IsNullOrWhiteSpace(analysis.Model) && analysis.Model.Length <= 256 &&
+                !string.IsNullOrWhiteSpace(analysis.Prompt) && analysis.Prompt.Length <= 4000,
+                "analysis", "Analysis provider, model and bounded prompt are required.");
+            Check(analysis.Policy is "review" or "auto-high-certainty", "analysis.policy", "Unknown analysis policy.");
+            Check(analysis.ProposalRevision > 0 && analysis.ProposalRevision <= project.Revision,
+                "analysis.proposalRevision", "Analysis proposal revision is invalid.");
+            foreach (var proposal in project.Proposals)
+            {
+                var expectedDecision = proposal.RecommendedAction switch
+                {
+                    "retain" => "retain",
+                    "remove" when proposal.Certainty == "high" && analysis.Policy == "auto-high-certainty" => "remove",
+                    _ => "review"
+                };
+                Check(proposal.Decision == expectedDecision, proposal.Id,
+                    "Proposal decision does not follow the recorded conservative analysis policy.");
+            }
+        }
+        else Check(project.Evidence.Length == 0 && project.Observations.Length == 0 && project.Proposals.Length == 0,
+            "analysis", "Analysis content requires provenance.");
         ids.Clear();
         foreach (var voice in project.Voices)
         {

@@ -31,6 +31,8 @@ try
                   edit <project.json> <operations.json> <expected-revision>
                   captions <project.json> <asset-id> <source.srt> <expected-revision>
                   captions-select <project.json> <asset-id> <candidates.json> <expected-revision> <preferred-language> [override-candidate-id]
+                  analyse <project.json> <submission.json> <expected-revision> <review|auto-high-certainty> <prompt>
+                  analysis-apply <project.json> <expected-revision> [proposal-id ...]
                   acquire <url> <new-output-directory> [deno-executable]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
@@ -98,6 +100,27 @@ try
                 var result = await operations.SelectCaptionsAsync(Path.GetFileName(fullProjectPath), assetId, candidates,
                     long.Parse(expected, CultureInfo.InvariantCulture), preferredLanguage, selectionOptions.FirstOrDefault(), token);
                 Console.WriteLine(JsonSerializer.Serialize(result, ProjectJson.Default.CaptionSelectionResult));
+                break;
+            }
+        case ["analyse", var path, var submissionPath, var expected, var policy, var prompt]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var submission = JsonSerializer.Deserialize(
+                    await ProjectFiles.ReadBoundedAsync(submissionPath, ProjectStore.MaxDocumentBytes, token),
+                    ProjectJson.Default.AnalysisSubmission) ?? throw new InvalidDataException("Analysis submission cannot be null.");
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var result = await operations.SaveAnalysisAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), prompt, policy, submission, token);
+                Console.WriteLine(JsonSerializer.Serialize(result, ProjectJson.Default.AnalysisPlanResult));
+                break;
+            }
+        case ["analysis-apply", var path, var expected, .. var proposalIds]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var edited = await operations.ApplyAnalysisAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), proposalIds.Length == 0 ? null : proposalIds, token);
+                Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
         case ["preflight", var path]:

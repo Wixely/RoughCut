@@ -28,6 +28,7 @@ internal static class McpTests
             var names = tools.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
                 "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
+                "roughcut_save_analysis", "roughcut_apply_analysis",
                 "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
@@ -153,6 +154,32 @@ internal static class McpTests
             Assert(response.RootElement.GetProperty("selectedId").GetString() == "manual" &&
                 response.RootElement.GetProperty("project").GetProperty("captions").GetProperty("selection").GetString() == "recommended",
                 "MCP caption recommendation or provenance is incorrect.");
+        });
+
+        await check("MCP persists evidence-backed analysis and retains review decisions", async () =>
+        {
+            await using var client = await CreateClientAsync(command, arguments);
+            var planned = await client.CallToolAsync("roughcut_save_analysis", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["expectedRevision"] = 5L,
+                ["prompt"] = "Remove advertisements",
+                ["policy"] = "review",
+                ["submission"] = JsonDocument.Parse("""{"assetId":"source-1","provider":"fixture-agent","model":"labelled-v1","evidence":[{"id":"evidence-1","assetId":"source-1","start":0,"end":500,"kind":"frame","summary":"Possible interruption.","speechSegmentIds":[],"frameTicks":[100]}],"observations":[{"id":"observation-1","assetId":"source-1","start":0,"end":500,"label":"possible-ad","summary":"Uncertain material requires review.","certainty":"low","recommendedAction":"remove","evidenceIds":["evidence-1"]}]}""").RootElement.Clone()
+            });
+            Assert(planned.IsError != true, "MCP analysis planning failed.");
+            using var response = JsonDocument.Parse(planned.Content.OfType<TextContentBlock>().Single().Text);
+            Assert(response.RootElement.GetProperty("removeDecisions").GetInt32() == 0 &&
+                response.RootElement.GetProperty("reviewDecisions").GetInt32() == 1 &&
+                response.RootElement.GetProperty("project").GetProperty("revision").GetInt64() == 6,
+                "MCP review policy did not retain uncertain material.");
+            var apply = await client.CallToolAsync("roughcut_apply_analysis", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["expectedRevision"] = 6L
+            });
+            Assert(apply.IsError == true && apply.Content.OfType<TextContentBlock>().Single().Text.Contains("No removal proposals", StringComparison.Ordinal),
+                "MCP automatically applied a proposal requiring review.");
         });
 
         await check("MCP image export jobs complete, persist and cancel safely", async () =>

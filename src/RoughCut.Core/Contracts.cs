@@ -34,6 +34,17 @@ public sealed record SpeechSegment(
     string Assignment = "unknown", bool Overlap = false);
 public sealed record TranscriptionProvenance(string AssetId, string SourceSha256, string Provider,
     string Model, string Language, int ChunkSeconds);
+public sealed record AnalysisEvidence(string Id, string AssetId, long Start, long End, string Kind,
+    string Summary, string[] SpeechSegmentIds, long[] FrameTicks);
+public sealed record AnalysisObservation(string Id, string AssetId, long Start, long End, string Label,
+    string Summary, string Certainty, string RecommendedAction, string[] EvidenceIds);
+public sealed record EditorialProposal(string Id, string ObservationId, string ClipId, long In, long Out,
+    string RecommendedAction, string Decision, string Reason, string Certainty, string[] EvidenceIds);
+public sealed record AnalysisProvenance(string AssetId, string SourceSha256, string Provider, string Model,
+    string Prompt, string Policy, long ProposalRevision);
+public sealed record AnalysisSubmission(string AssetId, string Provider, string Model,
+    AnalysisEvidence[] Evidence, AnalysisObservation[] Observations);
+public sealed record AnalysisPlanResult(EditProject Project, int RemoveDecisions, int ReviewDecisions, int RetainDecisions);
 public sealed record VoiceMapping(string Id, string SpeakerId, string Provider, string Voice);
 public sealed record VoiceReplacement(
     string Id, string SegmentId, string MappingId, string Text, string? GeneratedAssetId = null);
@@ -53,6 +64,10 @@ public sealed record EditProject
     public Speaker[] Speakers { get; init; } = [];
     public SpeechSegment[] Speech { get; init; } = [];
     public TranscriptionProvenance? Transcription { get; init; }
+    public AnalysisEvidence[] Evidence { get; init; } = [];
+    public AnalysisObservation[] Observations { get; init; } = [];
+    public EditorialProposal[] Proposals { get; init; } = [];
+    public AnalysisProvenance? Analysis { get; init; }
     public VoiceMapping[] Voices { get; init; } = [];
     public VoiceReplacement[] Replacements { get; init; } = [];
     public AssetProvenance[] Provenance { get; init; } = [];
@@ -81,6 +96,9 @@ public sealed record TimelineFrameInfo(
 [JsonSerializable(typeof(EditOperation[]))]
 [JsonSerializable(typeof(CaptionCandidate[]))]
 [JsonSerializable(typeof(CaptionSelectionResult))]
+[JsonSerializable(typeof(AnalysisSubmission))]
+[JsonSerializable(typeof(AnalysisPlanResult))]
+[JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(ExportPlan))]
 [JsonSerializable(typeof(ExportReport))]
 public partial class ProjectJson : JsonSerializerContext;

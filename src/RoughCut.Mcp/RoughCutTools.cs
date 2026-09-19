@@ -87,6 +87,20 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         => TextAsync(() => operations.SelectCaptionsAsync(projectPath, assetId, candidates, expectedRevision,
             preferredLanguage, overrideCandidateId, cancellationToken), ProjectJson.Default.CaptionSelectionResult);
 
+    [McpServerTool(Name = "roughcut_save_analysis")]
+    [Description("Validate and persist provider-neutral source-time evidence and observations, then create conservative revision-bound editorial proposals. Uncertain removals remain review items unless the explicit auto-high-certainty policy applies.")]
+    public Task<CallToolResult> SaveAnalysisAsync(string projectPath, long expectedRevision, string prompt,
+        string policy, AnalysisSubmission submission, CancellationToken cancellationToken)
+        => TextAsync(() => operations.SaveAnalysisAsync(projectPath, expectedRevision, prompt, policy, submission, cancellationToken),
+            ProjectJson.Default.AnalysisPlanResult);
+
+    [McpServerTool(Name = "roughcut_apply_analysis")]
+    [Description("Apply removal decisions from the exact current analysis revision. Omit proposalIds to apply only auto-approved removals; supply IDs for an explicit reviewed selection.")]
+    public Task<CallToolResult> ApplyAnalysisAsync(string projectPath, long expectedRevision,
+        CancellationToken cancellationToken, string[]? proposalIds = null)
+        => TextAsync(() => operations.ApplyAnalysisAsync(projectPath, expectedRevision, proposalIds, cancellationToken),
+            ProjectJson.Default.EditProject);
+
     [McpServerTool(Name = "roughcut_acquire_url")]
     [Description("Acquire one HTTP(S) video plus available subtitles through a configured standalone yt-dlp into a new bounded workspace directory.")]
     public Task<CallToolResult> AcquireAsync(string sourceUrl, string destinationDirectory,
