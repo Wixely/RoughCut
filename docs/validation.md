@@ -6,7 +6,7 @@
 - Owner: Implementation agent
 - State: Windows foundation, bounded export and stdio MCP/job checks executed; full application acceptance pending
 
-See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md) and [MCP evidence](evidence/2026-09-19-mcp.md): managed verification passes 32 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. The bounded copy/encode slice validates complete decoded content and timestamps; broader media, image rendering, host and speech gates remain pending.
+See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md), [MCP evidence](evidence/2026-09-19-mcp.md) and [timed-image evidence](evidence/2026-09-19-timed-images.md): managed verification passes 33 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. The bounded copy/encode/image slice validates complete decoded content, timestamps and image-generated silence; broader media, interactive image-client, host and speech gates remain pending.
 
 ## First executable slice
 

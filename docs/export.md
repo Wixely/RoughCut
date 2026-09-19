@@ -17,10 +17,11 @@ Source and output are each limited to 60 seconds, video to 1920x1080 and 6,000 f
 | FFV1 or H.264 video | Unsupported for copy in this slice, regardless of keyframe flags | Decode retained frames and encode losslessly to FFV1 |
 | PCM audio | Packet timestamps and lengths exactly match sample counts, with both cuts on packet boundaries | Sample-accurate trim, reblock and PCM encoding when packet boundaries/rounding prevent copy |
 | Crop | Requires encoding | RGB conversion before exact pixel crop; all clips must produce the same dimensions |
+| Timed PNG still | Never copied as a video packet | Scale with `contain` or `cover`, apply the optional crop, hold for an exact frame count and encode to FFV1; synthesize matching 48 kHz PCM silence |
 
 Per-stream decisions apply consistently across the output: if any video clip needs encoding, all video clips use FFV1, keeping concat codec parameters consistent. Audio can remain copied. Source PCM container timestamps may differ from exact sample positions by at most one millisecond for the encoding path; larger gaps/drift are rejected. Output audio samples must exactly match the selected source samples. Hard cuts may still have audible discontinuities; no crossfade is inserted.
 
-MP4, compressed audio (including AAC/priming), video-only sources, VFR/gaps, nonzero origins, chapters, extra streams, multiple source videos, still-image clips, silence edits and voice replacements are rejected by export for now. Some of these remain supported by inspection/frame extraction or represented in project contracts. Export never treats those contracts as proof that rendering is implemented. Chapter-bearing inputs are rejected instead of silently losing chapters; ordinary container metadata is intentionally omitted from output.
+MP4, compressed audio (including AAC/priming), video-only sources, VFR/gaps, nonzero origins, chapters, extra streams, multiple source videos, image-only timelines, general silence edits and voice replacements are rejected by export for now. A timed PNG can be inserted only into a timeline with one supported active video/audio source. Its duration must align exactly with the source frame cadence and 48 kHz sample grid, and it always selects complete FFV1/PCM rendering. PNG input is limited to 8 MiB, 8-bit RGB/RGBA, non-interlaced, at most 8K pixels. Chapter-bearing inputs are rejected instead of silently losing chapters; ordinary container metadata is intentionally omitted from output.
 
 ## Commands
 
@@ -45,11 +46,12 @@ The example operations require a source of at least three seconds, a project tim
   { "action": "reorder", "order": ["clip-2", "clip-1"] },
   { "action": "crop", "clipId": "clip-1", "crop": { "x": 0, "y": 0, "width": 80, "height": 48 } },
   { "action": "crop", "clipId": "clip-2", "crop": { "x": 8, "y": 4, "width": 80, "height": 48 } },
+  { "action": "insert-image", "clipId": "title-card", "assetId": "image-a1", "duration": 1000, "beforeClipId": "clip-1", "fit": "contain" },
   { "action": "export-mode", "mode": "prefer-stream-copy" }
 ]
 ```
 
-Use `remove` with `clipId` to delete a clip, or `crop` with a null crop to clear it. Reorder must list every remaining clip exactly once. Trim only shrinks the current interval. Use a saved prior project as a candidate with the next revision to restore an earlier edit; a dedicated undo-history UI is not implemented yet.
+Use `remove` with `clipId` to delete a clip, or `crop` with a null crop to clear it. `insert-image` requires an imported image asset, a new clip ID and a positive hold duration in project ticks; omit `beforeClipId` to append it. Its audio policy is fixed to silence. Reorder must list every remaining clip exactly once. Trim only shrinks the current interval. Use a saved prior project as a candidate with the next revision to restore an earlier edit; a dedicated undo-history UI is not implemented yet.
 
 `preflight` prints a JSON plan and exits nonzero for unsupported requests. The plan includes the canonical project hash/revision, requested/resolved boundaries, frame/sample ranges, output mapping, dimensions and each stream's copy/encode reason. It verifies the used media and caption-source hashes. It does not trust a keyframe flag as proof of independent decoding.
 
@@ -73,10 +75,10 @@ The new output directory is an atomic bundle:
 - `captions.srt`: retimed captions when the project has a caption track; empty if no cues remain.
 - `export.json`: requested/resolved mapping, stream decisions, source/output hashes, tool versions, exact retimed caption intervals and validation evidence.
 
-Before publication, the exporter checks every output presentation timestamp and frame hash against the selected source/crop, exact PCM samples against the selected source intervals, all sample/frame counts and A/V duration, and packet payload hashes for streams declared copied. This includes both sides of every join. FFmpeg success alone does not publish an output. Files are staged next to the destination and the directory is renamed only after validation; collisions, tool failures and cancellation remove staged artifacts and preserve the source. Network filesystems, sudden power loss and disk-full recovery remain untested.
+Before publication, the exporter checks every output presentation timestamp and frame hash against the selected source/crop or fitted image, exact PCM samples against selected source intervals or generated image-clip silence, all sample/frame counts and A/V duration, and packet payload hashes for streams declared copied. This includes both sides of every join. FFmpeg success alone does not publish an output. Files are staged next to the destination and the directory is renamed only after validation; collisions, tool failures and cancellation remove staged artifacts and preserve the source. Network filesystems, sudden power loss and disk-full recovery remain untested.
 
 ## Verification and next action
 
 Run `.\scripts\verify.ps1 -PublishAot` for the synthetic regression suite. The export fixture has visible binary frame IDs, a changing-frequency audio signal and supplied captions. The independent frame-ID check verifies the reorder around the join; production validation additionally checks every pixel hash, selected PCM sample and copied packet payload.
 
-Next owner/action: **Implementation agent: add timed image insertion and encoded still rendering (remaining RC-10)** around these APIs, with revision-aware preview and MCP parity. Extend codec/container coverage only with equivalent join and audio evidence.
+Next owner/action: **Implementation agent: begin RC-03 bounded local caption acquisition and STT evaluation**. Extend codec/container or image-compositing coverage only with equivalent join, pixel and audio evidence.
