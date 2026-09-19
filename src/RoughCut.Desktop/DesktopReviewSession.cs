@@ -8,8 +8,9 @@ public sealed class DesktopReviewSession
 {
     private readonly RoughCutOperations _operations;
     private readonly string _projectName;
-    private readonly Stack<LabelChange> _undo = new();
-    private readonly Stack<LabelChange> _redo = new();
+    private readonly Stack<ReviewChange> _undo = new();
+    private readonly Stack<ReviewChange> _redo = new();
+    private string _selectionLabel = "Timeline start";
 
     private DesktopReviewSession(string projectPath, RoughCutOperations operations, EditProject project)
     {
@@ -23,12 +24,14 @@ public sealed class DesktopReviewSession
     public string ProjectPath { get; }
     public EditProject Project { get; private set; }
     public TimelineFrame? Preview { get; private set; }
+    public FrameImage? SourcePreview { get; private set; }
     public DesktopPlaybackProxy? Playback { get; private set; }
     public string? SelectedSegmentId { get; private set; }
     public string? SelectedSpeakerId { get; private set; }
     public string Selection { get; private set; } = "No frame selected";
     public string Crop { get; private set; } = "No active crop";
     public string PlaybackStatus { get; private set; } = "Playback proxy has not been prepared";
+    public string? SelectedClipId => Preview?.Info.ClipId;
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
 
@@ -52,8 +55,18 @@ public sealed class DesktopReviewSession
     {
         Playback = null;
         PlaybackStatus = "Preparing synchronized playback…";
-        Playback = await new DesktopPlaybackProxyBuilder().PrepareAsync(ProjectPath, token);
-        PlaybackStatus = $"Synchronized WebM proxy · {Playback.Length / 1024d / 1024d:0.0} MiB";
+        try
+        {
+            Playback = await new DesktopPlaybackProxyBuilder().PrepareAsync(ProjectPath, token);
+            PlaybackStatus = $"Synchronized WebM proxy · {Playback.Length / 1024d / 1024d:0.0} MiB";
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
+            InvalidOperationException or KeyNotFoundException or ProjectValidationException or RevisionConflictException or
+            MediaToolException or ExportRejectedException or DesktopPlaybackUnavailableException)
+        {
+            PlaybackStatus = exception.Message;
+            throw;
+        }
     }
 
     public void PlaybackUnavailable(string message)
@@ -80,6 +93,12 @@ public sealed class DesktopReviewSession
         await SelectSourceAsync(observation.AssetId, observation.Start, observation.Summary, token);
     }
 
+    public async Task SelectClipAsync(string clipId, CancellationToken token = default)
+    {
+        var mapping = ProjectValidator.MapTimeline(Project).Single(item => item.ClipId == clipId);
+        await SelectSourceAsync(mapping.AssetId, mapping.SourceIn, $"Clip {clipId}", token);
+    }
+
     public void SelectSpeaker(string speakerId) => SelectedSpeakerId = Project.Speakers.Single(item => item.Id == speakerId).Id;
 
     public async Task RenameSelectedSpeakerAsync(string label, CancellationToken token = default)
@@ -90,24 +109,42 @@ public sealed class DesktopReviewSession
         if (string.Equals(label, speaker.Label, StringComparison.Ordinal)) return;
         Project = await _operations.ApplySpeakerEditsAsync(_projectName, Project.Revision,
             [new("rename", speaker.Id, Label: label, Reason: "desktop-review")], token);
-        _undo.Push(new(speaker.Id, speaker.Label, label));
+        _undo.Push(new LabelChange(speaker.Id, speaker.Label, label));
         _redo.Clear();
+    }
+
+    public async Task ApplyCropAsync(Crop? crop, CancellationToken token = default)
+    {
+        var clipId = SelectedClipId ?? throw new InvalidOperationException("Select a video clip before changing its crop.");
+        var clip = Project.Timeline.Single(item => item.Id == clipId);
+        if (Project.Assets.Single(item => item.Id == clip.AssetId).Kind != "video")
+            throw new InvalidOperationException("Only video clips can be cropped in desktop review.");
+        if (Equals(clip.Crop, crop)) return;
+        var selected = Preview?.Info;
+        await ApplyCropCoreAsync(clipId, crop, token);
+        _undo.Push(new CropChange(clipId, clip.Crop, crop));
+        _redo.Clear();
+        await RefreshAfterCropAsync(selected, token);
     }
 
     public async Task UndoAsync(CancellationToken token = default)
     {
         if (!_undo.TryPeek(out var change)) return;
-        Project = await RenameAsync(change.SpeakerId, change.Before, "desktop-undo", token);
+        var selected = Preview?.Info;
+        var cropChanged = await ApplyChangeAsync(change, forward: false, token);
         _undo.Pop();
         _redo.Push(change);
+        if (cropChanged) await RefreshAfterCropAsync(selected, token);
     }
 
     public async Task RedoAsync(CancellationToken token = default)
     {
         if (!_redo.TryPeek(out var change)) return;
-        Project = await RenameAsync(change.SpeakerId, change.After, "desktop-redo", token);
+        var selected = Preview?.Info;
+        var cropChanged = await ApplyChangeAsync(change, forward: true, token);
         _redo.Pop();
         _undo.Push(change);
+        if (cropChanged) await RefreshAfterCropAsync(selected, token);
     }
 
     public async Task ReloadAsync(CancellationToken token = default)
@@ -135,6 +172,12 @@ public sealed class DesktopReviewSession
         var resolvedSource = Math.Clamp(sourceTicks, mapping.SourceIn, mapping.SourceOut - 1);
         var timelineTicks = checked(mapping.OutputIn + resolvedSource - mapping.SourceIn);
         Preview = await _operations.GetTimelineFrameAsync(_projectName, Project.Revision, timelineTicks, 960, token);
+        var asset = Project.Assets.Single(item => item.Id == assetId);
+        SourcePreview = asset.Kind == "video"
+            ? await _operations.GetFrameAsync(_projectName, assetId, resolvedSource,
+                Project.TimeBase.Numerator, Project.TimeBase.Denominator, 360, token)
+            : null;
+        _selectionLabel = label;
         Selection = $"{label} · timeline {timelineTicks} · source {resolvedSource}";
         var clip = Project.Timeline.Single(item => item.Id == mapping.ClipId);
         Crop = clip.Crop is null ? "Full source frame" :
@@ -149,5 +192,38 @@ public sealed class DesktopReviewSession
         _operations.ApplySpeakerEditsAsync(_projectName, Project.Revision,
             [new("rename", speakerId, Label: label, Reason: reason)], token);
 
-    private sealed record LabelChange(string SpeakerId, string Before, string After);
+    private async Task ApplyCropCoreAsync(string clipId, Crop? crop, CancellationToken token)
+    {
+        Project = await _operations.ApplyEditsAsync(_projectName, Project.Revision,
+            [new("crop", clipId, Crop: crop)], token);
+        Playback = null;
+        PlaybackStatus = "Timeline changed · rebuild playback to review the crop";
+    }
+
+    private async Task RefreshAfterCropAsync(TimelineFrameInfo? selected, CancellationToken token)
+    {
+        if (selected?.SourceActual is { } source)
+            await SelectSourceAsync(selected.AssetId, source.Ticks, _selectionLabel, token);
+        else
+            await InitializePreviewAsync(token);
+    }
+
+    private async Task<bool> ApplyChangeAsync(ReviewChange change, bool forward, CancellationToken token)
+    {
+        switch (change)
+        {
+            case LabelChange label:
+                Project = await RenameAsync(label.SpeakerId, forward ? label.After : label.Before,
+                    forward ? "desktop-redo" : "desktop-undo", token);
+                return false;
+            case CropChange crop:
+                await ApplyCropCoreAsync(crop.ClipId, forward ? crop.After : crop.Before, token);
+                return true;
+        }
+        return false;
+    }
+
+    private abstract record ReviewChange;
+    private sealed record LabelChange(string SpeakerId, string Before, string After) : ReviewChange;
+    private sealed record CropChange(string ClipId, Crop? Before, Crop? After) : ReviewChange;
 }

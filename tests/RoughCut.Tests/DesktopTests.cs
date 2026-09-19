@@ -43,6 +43,22 @@ internal static class DesktopTests
                 "Desktop snapshot did not contain the expected rendered review surface.");
         });
 
+        await check("Desktop crop editing persists with undo and redo", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-preview-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var asset = session.Project.Assets.Single(item => item.Id == "source");
+            var crop = new Crop(8, 4, asset.Width - 16, asset.Height - 8);
+            await session.ApplyCropAsync(crop);
+            await session.UndoAsync();
+            await session.RedoAsync();
+            var saved = await new ProjectStore().LoadAsync(projectPath);
+            Assert(saved.Revision == 4 && saved.Timeline.Single().Crop == crop && session.SourcePreview is not null &&
+                session.Preview?.Info.Crop == crop && session.CanUndo && !session.CanRedo && session.Playback is null,
+                "Desktop crop history or exact-frame refresh did not preserve the revisioned edit.");
+        });
+
         await check("Desktop playback proxy decodes with bounded audio drift", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-preview-project.json");

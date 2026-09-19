@@ -26,6 +26,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         Rebuild();
         document.OnClick(".speech-row", e => Run(() => session.SelectSegmentAsync(Required(e, "data-id")), seekAfter: true));
         document.OnClick(".evidence-row", e => Run(() => session.SelectEvidenceAsync(Required(e, "data-id")), seekAfter: true));
+        document.OnClick(".clip", e => Run(() => session.SelectClipAsync(Required(e, "data-id")), seekAfter: true));
         document.OnClick(".speaker-row", e =>
         {
             session.SelectSpeaker(Required(e, "data-id"));
@@ -33,8 +34,10 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
             document.Refresh();
         });
         document.OnClick(".save-label", _ => Run(() => session.RenameSelectedSpeakerAsync(_model.SelectedLabel)));
-        document.OnClick(".undo", _ => Run(() => session.UndoAsync()));
-        document.OnClick(".redo", _ => Run(() => session.RedoAsync()));
+        document.OnClick(".apply-crop", _ => Run(ApplyCropAsync, seekAfter: true));
+        document.OnClick(".reset-crop", _ => Run(ResetCropAsync, seekAfter: true));
+        document.OnClick(".undo", _ => Run(() => UndoRedoAsync(redo: false), seekAfter: true));
+        document.OnClick(".redo", _ => Run(() => UndoRedoAsync(redo: true), seekAfter: true));
         document.OnClick(".reload", _ => Run(ReloadAsync, seekAfter: true));
     }
 
@@ -42,6 +45,26 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
     {
         await session.ReloadAsync();
         await session.PreparePlaybackAsync();
+    }
+
+    private async Task ApplyCropAsync()
+    {
+        await session.ApplyCropAsync(new(ParseCrop(_model.CropX, "X"), ParseCrop(_model.CropY, "Y"),
+            ParseCrop(_model.CropWidth, "width"), ParseCrop(_model.CropHeight, "height")));
+        await session.PreparePlaybackAsync();
+    }
+
+    private async Task ResetCropAsync()
+    {
+        await session.ApplyCropAsync(null);
+        await session.PreparePlaybackAsync();
+    }
+
+    private async Task UndoRedoAsync(bool redo)
+    {
+        if (redo) await session.RedoAsync();
+        else await session.UndoAsync();
+        if (session.Playback is null) await session.PreparePlaybackAsync();
     }
 
     private void Run(Func<Task> action, bool seekAfter = false)
@@ -55,7 +78,8 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         }
         catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
             InvalidOperationException or KeyNotFoundException or ProjectValidationException or
-            RevisionConflictException or RoughCut.Media.MediaToolException)
+            RevisionConflictException or RoughCut.Media.MediaToolException or RoughCut.Media.ExportRejectedException or
+            DesktopPlaybackUnavailableException)
         {
             _model.Status = exception.Message;
         }
@@ -73,8 +97,22 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
             "data:image/png;base64," + Convert.ToBase64String(session.Preview.Png);
         _model.PlaybackUri = session.Playback is null ? "" : new Uri(session.Playback.Path).AbsoluteUri;
         _model.PlaybackStatus = session.PlaybackStatus;
+        _model.SourcePreviewDataUri = session.SourcePreview is null ? "" :
+            "data:image/png;base64," + Convert.ToBase64String(session.SourcePreview.Png);
         _model.Selection = session.Selection;
         _model.Crop = session.Crop;
+        var selectedClip = session.SelectedClipId is null ? null :
+            project.Timeline.Single(item => item.Id == session.SelectedClipId);
+        var selectedAsset = selectedClip is null ? null : project.Assets.Single(item => item.Id == selectedClip.AssetId);
+        var editable = selectedClip is not null && selectedAsset?.Kind == "video";
+        var crop = editable ? selectedClip!.Crop ?? new Crop(0, 0, selectedAsset!.Width, selectedAsset.Height) : new(0, 0, 1, 1);
+        _model.CropEditorClass = editable ? "" : "hidden";
+        _model.CropX = crop.X.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropY = crop.Y.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropWidth = crop.Width.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropHeight = crop.Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.CropCanvasStyle = editable ? CanvasStyle(selectedAsset!) : "";
+        _model.CropBoxStyle = editable ? CropBoxStyle(crop, selectedAsset!) : "";
         _model.Speakers = project.Speakers.Select(item => new SpeakerRow
         {
             Id = item.Id,
@@ -96,7 +134,8 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         {
             Id = item.ClipId,
             Range = $"{FormatTime(item.OutputIn, project.TimeBase)}–{FormatTime(item.OutputOut, project.TimeBase)}",
-            Source = item.AssetId
+            Source = item.AssetId,
+            CssClass = item.ClipId == session.SelectedClipId ? "selected" : ""
         }).ToArray();
         _model.Evidence = project.Proposals.Take(100).Select(proposal =>
         {
@@ -109,6 +148,22 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
 
     private static string Required(CupriPointerEvent e, string attribute) =>
         e.Element.GetAttribute(attribute) ?? throw new InvalidDataException($"UI element is missing {attribute}.");
+
+    private static int ParseCrop(string value, string field) =>
+        int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed) ? parsed : throw new ArgumentException($"Crop {field} must be a whole number.");
+
+    private static string CanvasStyle(MediaAsset asset)
+    {
+        var scale = Math.Min(320d / asset.Width, 150d / asset.Height);
+        return FormattableString.Invariant($"width:{asset.Width * scale:0.###}px;height:{asset.Height * scale:0.###}px");
+    }
+
+    private static string CropBoxStyle(Crop crop, MediaAsset asset) => string.Format(
+        System.Globalization.CultureInfo.InvariantCulture,
+        "left:{0:0.###}%;top:{1:0.###}%;width:{2:0.###}%;height:{3:0.###}%",
+        crop.X * 100d / asset.Width, crop.Y * 100d / asset.Height,
+        crop.Width * 100d / asset.Width, crop.Height * 100d / asset.Height);
 
     private static string FormatTime(long ticks, TimeBase timeBase)
     {
@@ -132,7 +187,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
                 </div>
                 <div class="timeline-card">
                   <div class="section-title">Timeline</div>
-                  <div class="timeline"><div class="clip" data-repeat="Clips"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></div></div>
+                  <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></button></div>
                 </div>
                 <div class="evidence-card">
                   <div class="section-title">Editorial evidence</div>
@@ -141,6 +196,12 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
                 </div>
               </div>
               <aside class="review-panel">
+                <div class="crop-editor {{CropEditorClass}}">
+                  <div class="section-title">Crop selected clip</div>
+                  <div class="crop-canvas" style="{{CropCanvasStyle}}"><cupri-image src="{{SourcePreviewDataUri}}" fit="fill" alt="Uncropped source frame"></cupri-image><div class="crop-box" style="{{CropBoxStyle}}"></div></div>
+                  <div class="crop-fields"><label><span>X</span><cupri-textfield value="{{CropX}}"></cupri-textfield></label><label><span>Y</span><cupri-textfield value="{{CropY}}"></cupri-textfield></label><label><span>W</span><cupri-textfield value="{{CropWidth}}"></cupri-textfield></label><label><span>H</span><cupri-textfield value="{{CropHeight}}"></cupri-textfield></label></div>
+                  <div class="crop-actions"><cupri-button class="reset-crop" variant="ghost">Full frame</cupri-button><cupri-button class="apply-crop">Apply crop</cupri-button></div>
+                </div>
                 <div class="section-title">Speakers</div>
                 <button class="speaker-row {{CssClass}}" data-repeat="Speakers" data-id="{{Id}}"><span class="avatar">●</span><span>{{Label}}</span><small>{{Id}}</small></button>
                 <div class="rename"><cupri-textfield value="{{SelectedLabel}}" placeholder="Speaker label"></cupri-textfield><cupri-button class="save-label">Save label</cupri-button></div>
@@ -170,12 +231,18 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         .preview-meta { padding:10px 4px 0; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; } .preview-meta strong { color:var(--text); }
         .section-title { padding:12px 14px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px; font-size:11px; font-weight:bold; }
         .timeline { display:flex; gap:6px; padding:0 12px 12px; overflow:hidden; }
-        .clip { min-width:112px; flex:1; padding:9px; border-radius:7px; background:var(--panel2); border-top:3px solid var(--accent); display:flex; flex-direction:column; gap:3px; }
+        .clip { min-width:112px; flex:1; padding:9px; border:0; border-radius:7px; background:var(--panel2); border-top:3px solid var(--accent); display:flex; flex-direction:column; gap:3px; text-align:left; cursor:pointer; }
+        .clip:hover,.clip.selected { background:#263249; }
         .clip span,.clip small { color:var(--muted); font-size:10px; }
         .evidence-card { max-height:150px; overflow:hidden; padding-bottom:8px; } .empty { color:var(--muted); font-size:11px; padding:0 14px 8px; }
         button { color:inherit; font:inherit; } .evidence-row,.speaker-row,.speech-row { width:100%; border:0; text-align:left; cursor:pointer; }
         .evidence-row { display:flex; gap:8px; padding:7px 14px; background:transparent; } .decision { color:var(--accent); font-weight:bold; text-transform:uppercase; font-size:10px; }
         .review-panel { min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+        .crop-editor { padding-bottom:10px; border-bottom:1px solid var(--line); } .crop-editor.hidden { display:none; }
+        .crop-canvas { position:relative; margin:0 auto 8px; background:#05070b; overflow:hidden; }
+        .crop-canvas cupri-image { width:100%; height:100%; } .crop-box { position:absolute; box-sizing:border-box; border:2px solid var(--accent); background:#ff9f4322; }
+        .crop-fields { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; padding:0 12px; } .crop-fields label span { display:block; color:var(--muted); font-size:9px; margin-bottom:2px; }
+        .crop-actions { display:flex; justify-content:flex-end; gap:6px; padding:8px 12px 0; }
         .speaker-row { display:grid; grid-template-columns:18px 1fr auto; gap:8px; align-items:center; padding:8px 14px; background:transparent; border-left:3px solid transparent; }
         .speaker-row:hover,.speaker-row.selected,.speech-row:hover,.speech-row.selected { background:#202a3c; } .speaker-row.selected { border-left-color:var(--accent); }
         .speaker-row small { color:var(--muted); font-size:9px; } .avatar { color:var(--accent); }
@@ -197,8 +264,16 @@ public sealed partial class ReviewModel
     public string PreviewDataUri { get; set; } = "";
     public string PlaybackUri { get; set; } = "";
     public string PlaybackStatus { get; set; } = "";
+    public string SourcePreviewDataUri { get; set; } = "";
     public string Selection { get; set; } = "";
     public string Crop { get; set; } = "";
+    public string CropEditorClass { get; set; } = "hidden";
+    public string CropX { get; set; } = "0";
+    public string CropY { get; set; } = "0";
+    public string CropWidth { get; set; } = "1";
+    public string CropHeight { get; set; } = "1";
+    public string CropCanvasStyle { get; set; } = "";
+    public string CropBoxStyle { get; set; } = "";
     public string SelectedLabel { get; set; } = "";
     public string Status { get; set; } = "";
     public string Truncation { get; set; } = "";
@@ -210,5 +285,5 @@ public sealed partial class ReviewModel
 
 [CupriBindable] public sealed partial class SpeakerRow { public string Id { get; set; } = ""; public string Label { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeechRow { public string Id { get; set; } = ""; public string Time { get; set; } = ""; public string Speaker { get; set; } = ""; public string Text { get; set; } = ""; public string Badge { get; set; } = ""; public string CssClass { get; set; } = ""; }
-[CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; }
+[CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class EvidenceRow { public string Id { get; set; } = ""; public string Decision { get; set; } = ""; public string Summary { get; set; } = ""; }
