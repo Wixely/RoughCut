@@ -1,0 +1,285 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "RoughCut CLI",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "help"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut contract checks",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/tests/RoughCut.Tests/bin/Debug/net10.0/RoughCut.Tests.dll",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: inspect video",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "inspect",
+        "${input:videoPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: extract frame",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "frame",
+        "${input:videoPath}",
+        "${input:timestamp}",
+        "${input:frameOutput}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: create project",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "create",
+        "${input:videoPath}",
+        "${input:newProjectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: validate project",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "validate",
+        "${input:projectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: map timeline",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "map",
+        "${input:projectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: save project revision",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "save",
+        "${input:candidatePath}",
+        "${input:projectPath}",
+        "${input:expectedRevision}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: media and CLI checks",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/tests/RoughCut.Tests/bin/Debug/net10.0/RoughCut.Tests.dll",
+      "args": [
+        "--media",
+        "--cli",
+        "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+        "--mcp",
+        "${workspaceFolder}/src/RoughCut.Mcp/bin/Debug/net10.0/roughcut-mcp.dll"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut MCP (stdio)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Mcp/bin/Debug/net10.0/roughcut-mcp.dll",
+      "args": [
+        "--workspace",
+        "${input:mcpWorkspace}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole"
+    },
+    {
+      "name": "RoughCut: apply edit operations",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "edit",
+        "${input:projectPath}",
+        "${input:operationsPath}",
+        "${input:expectedRevision}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: import SRT captions",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "captions",
+        "${input:projectPath}",
+        "${input:assetId}",
+        "${input:captionPath}",
+        "${input:expectedRevision}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: preflight export",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "preflight",
+        "${input:projectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: export without encoding",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "export",
+        "${input:projectPath}",
+        "${input:exportDirectory}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: export allowing encoding",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "export",
+        "${input:projectPath}",
+        "${input:exportDirectory}",
+        "--allow-encode"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "mcpWorkspace",
+      "type": "promptString",
+      "description": "Workspace root exposed to the stdio MCP server",
+      "default": "${workspaceFolder}/artifacts/mcp-workspace"
+    },
+    {
+      "id": "videoPath",
+      "type": "promptString",
+      "description": "Local video path (absolute or relative to workspace; no surrounding quotes)",
+      "default": "artifacts/demo/media/source.mkv"
+    },
+    {
+      "id": "timestamp",
+      "type": "promptString",
+      "description": "Source-relative timestamp in seconds (up to six decimal places)",
+      "default": "0.35"
+    },
+    {
+      "id": "frameOutput",
+      "type": "promptString",
+      "description": "New PNG output path (must not already exist)",
+      "default": "artifacts/demo/frame.png"
+    },
+    {
+      "id": "newProjectPath",
+      "type": "promptString",
+      "description": "New project JSON path (must not exist; video must be inside its directory)",
+      "default": "artifacts/demo/project.json"
+    },
+    {
+      "id": "projectPath",
+      "type": "promptString",
+      "description": "Existing project JSON path",
+      "default": "artifacts/demo/project.json"
+    },
+    {
+      "id": "candidatePath",
+      "type": "promptString",
+      "description": "Edited candidate JSON path (same project ID, revision advanced by one)",
+      "default": "artifacts/demo/candidate.json"
+    },
+    {
+      "id": "expectedRevision",
+      "type": "promptString",
+      "description": "Current destination revision before saving",
+      "default": "1"
+    },
+    {
+      "id": "operationsPath",
+      "type": "promptString",
+      "description": "Edit operation array JSON (times in project ticks)",
+      "default": "examples/cut-and-reorder.json"
+    },
+    {
+      "id": "assetId",
+      "type": "promptString",
+      "description": "Video asset ID to attach captions to",
+      "default": "source-1"
+    },
+    {
+      "id": "captionPath",
+      "type": "promptString",
+      "description": "UTF-8 SRT file inside the project directory",
+      "default": "artifacts/demo/source.srt"
+    },
+    {
+      "id": "exportDirectory",
+      "type": "promptString",
+      "description": "New export directory (must not already exist)",
+      "default": "artifacts/demo/export"
+    }
+  ]
+}
