@@ -39,6 +39,8 @@ try
     builder.Services.AddSingleton(new DiarizationSettings(
         Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL"),
         Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_EMBEDDING_MODEL"),
+        Environment.GetEnvironmentVariable("ROUGHCUT_DIARIZATION_WORKER") ??
+            Path.Combine(AppContext.BaseDirectory, "roughcut-diarization.dll"),
         diarizationSpeakerCount, diarizationThreshold));
     builder.Services.AddSingleton(new QwenSettings(Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_ENDPOINT"),
         Environment.GetEnvironmentVariable("ROUGHCUT_QWEN_API_KEY"), qwenTimeoutSeconds));

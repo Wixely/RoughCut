@@ -4,6 +4,16 @@ using System.Text;
 using RoughCut.Application;
 using RoughCut.Core;
 using RoughCut.Media;
+using RoughCut.Speech.Sherpa;
+
+if (args is ["__worker", ..] &&
+    Environment.GetEnvironmentVariable("ROUGHCUT_TEST_DIARIZATION_WORKER_MARKER") is { } workerMarker)
+{
+    await File.WriteAllTextAsync(workerMarker,
+        $"{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}|{args[1]}");
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+    return 0;
+}
 
 var failures = 0;
 var passed = 0;
@@ -266,6 +276,55 @@ await Check("Diarization assigns stable speakers and preserves reviewed correcti
         "A reviewed speaker merge did not update the stable diarization mapping.");
     await Throws<ArgumentException>(() => Task.FromResult(DiarizationPlanner.Plan(project,
         submission with { Turns = [new("outside", -1, 100)] })));
+});
+
+await Check("Isolated diarization cancellation kills its worker and preserves the project", async () =>
+{
+    var directory = Path.Combine(testRoot, "diarization cancellation");
+    Directory.CreateDirectory(directory);
+    var source = Path.Combine(directory, "source.wav");
+    await File.WriteAllBytesAsync(source, "bounded fake audio"u8.ToArray());
+    var projectPath = Path.Combine(directory, "project.json");
+    await store.SaveAsync(projectPath, new EditProject
+    {
+        ProjectId = "diarization-cancellation",
+        TimeBase = new(1, 1000),
+        Assets = [new("source", "audio", "source.wav", await MediaReader.FingerprintAsync(source), 1000, 0, 0, "audio/wav")],
+        Speech = [new("speech", "source", 0, 1000, "Fixture", [], "unknown")]
+    }, 0);
+    var marker = Path.Combine(directory, "worker.marker");
+    var priorMarker = Environment.GetEnvironmentVariable("ROUGHCUT_TEST_DIARIZATION_WORKER_MARKER");
+    Environment.SetEnvironmentVariable("ROUGHCUT_TEST_DIARIZATION_WORKER_MARKER", marker);
+    using var cancellation = new CancellationTokenSource();
+    try
+    {
+        var worker = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        var provider = new IsolatedSherpaSpeakerDiarizer(worker, "unused-segmentation.onnx", "unused-embedding.onnx", 2);
+        var operation = new RoughCutOperations(new WorkspaceBoundary(directory)).DiarizeAsync(
+            "project.json", "source", 1, provider, cancellation.Token);
+        for (var attempt = 0; attempt < 100 && !File.Exists(marker); attempt++) await Task.Delay(50);
+        Assert(File.Exists(marker), "Isolated diarization worker did not start.");
+        cancellation.Cancel();
+        await Throws<OperationCanceledException>(() => operation);
+        var markerParts = (await File.ReadAllTextAsync(marker)).Split('|', 2);
+        var processId = int.Parse(markerParts[0], System.Globalization.CultureInfo.InvariantCulture);
+        var exited = false;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            exited = process.HasExited || process.WaitForExit(5000);
+        }
+        catch (ArgumentException) { exited = true; }
+        Assert(exited, "Cancelled diarization worker remained alive.");
+        Assert(!File.Exists(markerParts[1]), "Cancelled diarization left its temporary project copy.");
+        var saved = await store.LoadAsync(projectPath);
+        Assert(saved.Revision == 1 && saved.Diarization is null && saved.Speakers.Length == 0,
+            "Cancelled diarization changed the project.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("ROUGHCUT_TEST_DIARIZATION_WORKER_MARKER", priorMarker);
+    }
 });
 
 await Check("Speaker corrections and voice previews are revisioned and reversible", async () =>

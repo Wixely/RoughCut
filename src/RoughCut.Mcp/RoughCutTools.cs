@@ -127,9 +127,9 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
             if (string.IsNullOrWhiteSpace(diarization.SegmentationModelPath) ||
                 string.IsNullOrWhiteSpace(diarization.EmbeddingModelPath))
                 throw new InvalidOperationException("Local diarization requires ROUGHCUT_DIARIZATION_SEGMENTATION_MODEL and ROUGHCUT_DIARIZATION_EMBEDDING_MODEL on the MCP host.");
-            var provider = new SherpaSpeakerDiarizer(diarization.SegmentationModelPath,
-                diarization.EmbeddingModelPath, diarization.SpeakerCount, diarization.Threshold,
-                Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg");
+            var provider = new IsolatedSherpaSpeakerDiarizer(diarization.WorkerPath,
+                diarization.SegmentationModelPath, diarization.EmbeddingModelPath,
+                diarization.SpeakerCount, diarization.Threshold);
             var result = await operations.DiarizeAsync(projectPath, assetId, expectedRevision, provider, cancellationToken);
             return new() { Content = [new TextContentBlock { Text = JsonSerializer.Serialize(result, ProjectJson.Default.DiarizationPlanResult) }] };
         }

@@ -27,11 +27,24 @@ try
                 var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!),
                     Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg",
                     Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe");
-                var diarizer = new SherpaSpeakerDiarizer(segmentationModel, embeddingModel, count,
-                    ffmpeg: Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg");
+                var worker = System.Reflection.Assembly.GetEntryAssembly()?.Location
+                    ?? throw new InvalidOperationException("Diarization worker location is unavailable.");
+                var diarizer = new IsolatedSherpaSpeakerDiarizer(worker, segmentationModel, embeddingModel, count);
                 var result = await operations.DiarizeAsync(Path.GetFileName(fullProjectPath), assetId,
                     long.Parse(expectedRevision, CultureInfo.InvariantCulture), diarizer, cancellation.Token);
                 Console.WriteLine(JsonSerializer.Serialize(result, ProjectJson.Default.DiarizationPlanResult));
+                break;
+            }
+        case ["__worker", var projectPath, var assetId, var sourcePath, var segmentationModel, var embeddingModel,
+              var speakerCount, var threshold]:
+            {
+                var project = await new ProjectStore().LoadAsync(Path.GetFullPath(projectPath), cancellation.Token);
+                var diarizer = new SherpaSpeakerDiarizer(segmentationModel, embeddingModel,
+                    int.Parse(speakerCount, CultureInfo.InvariantCulture),
+                    float.Parse(threshold, CultureInfo.InvariantCulture),
+                    Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg");
+                var submission = await diarizer.DiarizeAsync(project, assetId, Path.GetFullPath(sourcePath), cancellation.Token);
+                Console.WriteLine(JsonSerializer.Serialize(submission, ProjectJson.Default.DiarizationSubmission));
                 break;
             }
         default:
