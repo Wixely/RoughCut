@@ -59,6 +59,37 @@ internal static class DesktopTests
                 "Desktop crop history or exact-frame refresh did not preserve the revisioned edit.");
         });
 
+        await check("Desktop background work stays responsive and supersedes stale selections", async () =>
+        {
+            var coordinator = new RoughCut.Desktop.DesktopWorkCoordinator();
+            var staleCompleted = false;
+            var latestCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            Assert(coordinator.StartLatest(token => Task.Delay(Timeout.InfiniteTimeSpan, token),
+                _ => staleCompleted = true), "The initial selection was not accepted.");
+            Assert(coordinator.StartLatest(_ => Task.CompletedTask, exception =>
+            {
+                if (exception is null) latestCompleted.TrySetResult();
+                else latestCompleted.TrySetException(exception);
+            }), "The replacement selection was not accepted.");
+            Assert(stopwatch.Elapsed < TimeSpan.FromSeconds(1), "Starting background frame work blocked the caller.");
+            await latestCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(50);
+            Assert(!staleCompleted, "A canceled frame request replaced the newer selection.");
+
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commandCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert(coordinator.StartCommand(() => release.Task, exception =>
+            {
+                if (exception is null) commandCompleted.TrySetResult();
+                else commandCompleted.TrySetException(exception);
+            }), "The edit command was not accepted.");
+            Assert(!coordinator.StartCommand(() => Task.CompletedTask, _ => { }),
+                "Concurrent revision writes were not rejected.");
+            release.TrySetResult();
+            await commandCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        });
+
         await check("Desktop playback proxy decodes with bounded audio drift", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-preview-project.json");

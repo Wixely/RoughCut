@@ -53,18 +53,23 @@ public sealed class DesktopReviewSession
 
     public async Task PreparePlaybackAsync(CancellationToken token = default)
     {
+        var revision = Project.Revision;
         Playback = null;
         PlaybackStatus = "Preparing synchronized playback…";
         try
         {
-            Playback = await new DesktopPlaybackProxyBuilder().PrepareAsync(ProjectPath, token);
-            PlaybackStatus = $"Synchronized WebM proxy · {Playback.Length / 1024d / 1024d:0.0} MiB";
+            var playback = await new DesktopPlaybackProxyBuilder().PrepareAsync(ProjectPath, token);
+            token.ThrowIfCancellationRequested();
+            if (Project.Revision != revision)
+                throw new OperationCanceledException("The timeline changed while playback was being prepared.", token);
+            Playback = playback;
+            PlaybackStatus = $"Synchronized WebM proxy · {playback.Length / 1024d / 1024d:0.0} MiB";
         }
         catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
             InvalidOperationException or KeyNotFoundException or ProjectValidationException or RevisionConflictException or
             MediaToolException or ExportRejectedException or DesktopPlaybackUnavailableException)
         {
-            PlaybackStatus = exception.Message;
+            if (!token.IsCancellationRequested && Project.Revision == revision) PlaybackStatus = exception.Message;
             throw;
         }
     }
@@ -82,9 +87,10 @@ public sealed class DesktopReviewSession
     public async Task SelectSegmentAsync(string segmentId, CancellationToken token = default)
     {
         var segment = Project.Speech.Single(item => item.Id == segmentId);
+        await SelectSourceAsync(segment.AssetId, segment.Start, segment.Text, token);
+        token.ThrowIfCancellationRequested();
         SelectedSegmentId = segment.Id;
         if (segment.SpeakerIds.Length == 1) SelectedSpeakerId = segment.SpeakerIds[0];
-        await SelectSourceAsync(segment.AssetId, segment.Start, segment.Text, token);
     }
 
     public async Task SelectEvidenceAsync(string observationId, CancellationToken token = default)
@@ -151,6 +157,8 @@ public sealed class DesktopReviewSession
     {
         var selectedSegmentId = SelectedSegmentId;
         Project = await _operations.ReadProjectAsync(_projectName, token);
+        Playback = null;
+        PlaybackStatus = "Project reloaded · preparing current timeline playback";
         _undo.Clear();
         _redo.Clear();
         if (SelectedSpeakerId is not null && Project.Speakers.All(item => item.Id != SelectedSpeakerId))
@@ -171,12 +179,15 @@ public sealed class DesktopReviewSession
             ?? throw new InvalidOperationException("The selected source evidence is not retained on the current timeline.");
         var resolvedSource = Math.Clamp(sourceTicks, mapping.SourceIn, mapping.SourceOut - 1);
         var timelineTicks = checked(mapping.OutputIn + resolvedSource - mapping.SourceIn);
-        Preview = await _operations.GetTimelineFrameAsync(_projectName, Project.Revision, timelineTicks, 960, token);
+        var preview = await _operations.GetTimelineFrameAsync(_projectName, Project.Revision, timelineTicks, 960, token);
         var asset = Project.Assets.Single(item => item.Id == assetId);
-        SourcePreview = asset.Kind == "video"
+        var sourcePreview = asset.Kind == "video"
             ? await _operations.GetFrameAsync(_projectName, assetId, resolvedSource,
                 Project.TimeBase.Numerator, Project.TimeBase.Denominator, 360, token)
             : null;
+        token.ThrowIfCancellationRequested();
+        Preview = preview;
+        SourcePreview = sourcePreview;
         _selectionLabel = label;
         Selection = $"{label} · timeline {timelineTicks} · source {resolvedSource}";
         var clip = Project.Timeline.Single(item => item.Id == mapping.ClipId);

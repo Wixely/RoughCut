@@ -9,7 +9,12 @@ namespace RoughCut.Desktop;
 public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlaybackController? playback = null) : CupriApp
 {
     private readonly ReviewModel _model = new();
+    private readonly DesktopWorkCoordinator _work = new();
+    private readonly Lock _playbackSync = new();
+    private readonly SemaphoreSlim _playbackGate = new(1, 1);
     private CupriDocument? _document;
+    private CancellationTokenSource? _playbackCancellation;
+    private long _playbackGeneration;
 
     public override string Title => "RoughCut Review";
     public override int Width => 1280;
@@ -24,68 +29,141 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
     {
         _document = document;
         Rebuild();
-        document.OnClick(".speech-row", e => Run(() => session.SelectSegmentAsync(Required(e, "data-id")), seekAfter: true));
-        document.OnClick(".evidence-row", e => Run(() => session.SelectEvidenceAsync(Required(e, "data-id")), seekAfter: true));
-        document.OnClick(".clip", e => Run(() => session.SelectClipAsync(Required(e, "data-id")), seekAfter: true));
-        document.OnClick(".speaker-row", e =>
+        document.OnClick(".speech-row", e => StartLatest(token =>
+            session.SelectSegmentAsync(Required(e, "data-id"), token), seekAfter: true));
+        document.OnClick(".evidence-row", e => StartLatest(token =>
+            session.SelectEvidenceAsync(Required(e, "data-id"), token), seekAfter: true));
+        document.OnClick(".clip", e => StartLatest(token =>
+            session.SelectClipAsync(Required(e, "data-id"), token), seekAfter: true));
+        document.OnClick(".speaker-row", e => StartCommand(() =>
         {
             session.SelectSpeaker(Required(e, "data-id"));
-            Rebuild();
-            document.Refresh();
-        });
-        document.OnClick(".save-label", _ => Run(() => session.RenameSelectedSpeakerAsync(_model.SelectedLabel)));
-        document.OnClick(".apply-crop", _ => Run(ApplyCropAsync, seekAfter: true));
-        document.OnClick(".reset-crop", _ => Run(ResetCropAsync, seekAfter: true));
-        document.OnClick(".undo", _ => Run(() => UndoRedoAsync(redo: false), seekAfter: true));
-        document.OnClick(".redo", _ => Run(() => UndoRedoAsync(redo: true), seekAfter: true));
-        document.OnClick(".reload", _ => Run(ReloadAsync, seekAfter: true));
+            return Task.CompletedTask;
+        }));
+        document.OnClick(".save-label", _ => StartCommand(() => session.RenameSelectedSpeakerAsync(_model.SelectedLabel)));
+        document.OnClick(".apply-crop", _ => StartCommand(ApplyCropAsync, seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".reset-crop", _ => StartCommand(ResetCropAsync, seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".undo", _ => StartCommand(() => UndoRedoAsync(redo: false), seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".redo", _ => StartCommand(() => UndoRedoAsync(redo: true), seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
+        if (session.Preview is null)
+            StartLatest(session.InitializePreviewAsync, seekAfter: true, startPlaybackAfter: playback is not null);
+        else if (playback is not null)
+            StartPlaybackPreparation();
     }
 
     private async Task ReloadAsync()
     {
         await session.ReloadAsync();
-        await session.PreparePlaybackAsync();
     }
 
     private async Task ApplyCropAsync()
     {
         await session.ApplyCropAsync(new(ParseCrop(_model.CropX, "X"), ParseCrop(_model.CropY, "Y"),
             ParseCrop(_model.CropWidth, "width"), ParseCrop(_model.CropHeight, "height")));
-        await session.PreparePlaybackAsync();
     }
 
     private async Task ResetCropAsync()
     {
         await session.ApplyCropAsync(null);
-        await session.PreparePlaybackAsync();
     }
 
     private async Task UndoRedoAsync(bool redo)
     {
         if (redo) await session.RedoAsync();
         else await session.UndoAsync();
-        if (session.Playback is null) await session.PreparePlaybackAsync();
     }
 
-    private void Run(Func<Task> action, bool seekAfter = false)
+    private void StartLatest(Func<CancellationToken, Task> action, bool seekAfter = false,
+        bool startPlaybackAfter = false)
     {
-        try
+        _model.Status = "Loading frame…";
+        _document?.Refresh();
+        if (!_work.StartLatest(action, exception =>
         {
-            _model.Status = "Working…";
+            Complete(exception, seekAfter);
+            if (exception is null && startPlaybackAfter) StartPlaybackPreparation();
+        }))
+        {
+            _model.Status = "Finish the current edit before selecting another frame.";
             _document?.Refresh();
-            action().GetAwaiter().GetResult();
-            _model.Status = "Ready";
         }
-        catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
-            InvalidOperationException or KeyNotFoundException or ProjectValidationException or
-            RevisionConflictException or RoughCut.Media.MediaToolException or RoughCut.Media.ExportRejectedException or
-            DesktopPlaybackUnavailableException)
+    }
+
+    private void StartCommand(Func<Task> action, bool seekAfter = false, bool rebuildPlayback = false)
+    {
+        if (rebuildPlayback) CancelPlaybackPreparation();
+        _model.Status = "Saving revision…";
+        _document?.Refresh();
+        if (!_work.StartCommand(action, exception =>
         {
-            _model.Status = exception.Message;
+            Complete(exception, seekAfter);
+            if (exception is null && rebuildPlayback && playback is not null) StartPlaybackPreparation();
+        }))
+        {
+            _model.Status = "An edit is already being saved.";
+            _document?.Refresh();
         }
+    }
+
+    private void StartPlaybackPreparation()
+    {
+        CancellationTokenSource cancellation;
+        long generation;
+        lock (_playbackSync)
+        {
+            _playbackCancellation?.Cancel();
+            cancellation = _playbackCancellation = new();
+            generation = ++_playbackGeneration;
+        }
+        _model.Status = "Preparing playback in the background…";
+        _document?.Refresh();
+        _ = Task.Run(async () =>
+        {
+            Exception? failure = null;
+            var canceled = false;
+            var entered = false;
+            try
+            {
+                await _playbackGate.WaitAsync(cancellation.Token);
+                entered = true;
+                await session.PreparePlaybackAsync(cancellation.Token);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { canceled = true; }
+            catch (Exception exception) { failure = exception; }
+            finally
+            {
+                if (entered) _playbackGate.Release();
+            }
+            var current = false;
+            lock (_playbackSync)
+            {
+                current = generation == _playbackGeneration && ReferenceEquals(_playbackCancellation, cancellation);
+                if (current) _playbackCancellation = null;
+            }
+            cancellation.Dispose();
+            if (canceled || !current) return;
+            if (failure is not null) session.PlaybackUnavailable(failure.Message);
+            Complete(failure, seekAfter: false);
+        });
+    }
+
+    private void CancelPlaybackPreparation()
+    {
+        lock (_playbackSync)
+        {
+            _playbackCancellation?.Cancel();
+            _playbackCancellation = null;
+            ++_playbackGeneration;
+        }
+    }
+
+    private void Complete(Exception? exception, bool seekAfter)
+    {
+        _model.Status = exception is null ? "Ready" : exception.Message;
         Rebuild(preserveStatus: true);
         _document?.Refresh();
-        if (seekAfter) playback?.Seek(session.SelectedTimelineSeconds);
+        if (exception is null && seekAfter) playback?.Seek(session.SelectedTimelineSeconds);
     }
 
     private void Rebuild(bool preserveStatus = false)

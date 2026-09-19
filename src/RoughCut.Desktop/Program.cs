@@ -20,27 +20,15 @@ try
         case ["review", var projectPath]:
             {
                 var session = await DesktopReviewSession.LoadAsync(projectPath);
-                await session.InitializePreviewAsync();
                 DesktopPlaybackController? playback = null;
                 if (!DesktopPlaybackController.Available)
                     session.PlaybackUnavailable("CupriFace native playback decoders are unavailable");
                 else
-                {
-                    try
-                    {
-                        await session.PreparePlaybackAsync();
-                        playback = new();
-                    }
-                    catch (Exception exception) when (IsPlaybackFailure(exception))
-                    {
-                        session.PlaybackUnavailable(exception.Message);
-                    }
-                }
+                    playback = new();
                 DesktopHost.Run(new RoughCutReviewApp(session, playback), document =>
                 {
-                    if (playback is null || session.Playback is null) return;
+                    if (playback is null) return;
                     document.UseVideo(playback);
-                    playback.Seek(session.SelectedTimelineSeconds);
                 });
                 return 0;
             }
@@ -73,11 +61,6 @@ catch (Exception exception) when (exception is IOException or ArgumentException 
     Console.Error.WriteLine(exception.Message);
     return 2;
 }
-
-static bool IsPlaybackFailure(Exception exception) => exception is IOException or ArgumentException or
-    InvalidDataException or InvalidOperationException or KeyNotFoundException or
-    RoughCut.Core.ProjectValidationException or RoughCut.Core.RevisionConflictException or
-    MediaToolException or DesktopPlaybackUnavailableException or ExportRejectedException;
 
 static async Task<int> ProbePlaybackAsync(string projectPath, string secondsText)
 {
