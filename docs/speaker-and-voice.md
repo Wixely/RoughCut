@@ -45,4 +45,4 @@ dotnet run --project src/RoughCut.Cli -- voice-state project.json 4 replacement-
 dotnet run --project src/RoughCut.Cli -- voice-state project.json 5 replacement-1 reverted
 ```
 
-The official 16-second two-speaker fixture and an isolated Windows x64 CLI both passed; see the [runtime evidence](evidence/2026-09-19-sherpa-diarization.md). Next owner/action: **Implementation agent: build the minimal desktop review UI and measure speaker/overlap error when representative fixtures are available; Wixely: provide representative multi-speaker and replacement examples.**
+The official 16-second two-speaker fixture and an isolated Windows x64 CLI both passed; see the [runtime evidence](evidence/2026-09-19-sherpa-diarization.md). The initial desktop review surface now exposes speaker labels and persisted rename undo/redo. Next owner/action: **Implementation agent: add synchronized playback and extend speaker/overlap measurement when representative fixtures are available; Wixely: provide representative multi-speaker and replacement examples.**

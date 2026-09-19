@@ -6,11 +6,11 @@
 
 ## Current state
 
-The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, bounded live acquisition/caption selection, local Whisper transcription and process-isolated Sherpa diarization, provider-neutral [evidence-backed analysis](analysis.md), stable [speaker corrections, loopback Qwen previews and fitted replacement rendering](speaker-and-voice.md), supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed and NativeAOT-CLI verification each pass 49 checks. Windows Sherpa execution/cancellation and live WSL/CUDA Qwen synthesis/rendering have passed for their bounded provider configurations; see the [Sherpa evidence](evidence/2026-09-19-sherpa-diarization.md) and [voice-rendering evidence](evidence/2026-09-19-voice-rendering.md). There is no GUI or standalone semantic provider. No remote or project license is selected.
+The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands, a [stdio MCP host](mcp.md) and an initial [CupriFace desktop review host](desktop.md) for projects, revision-safe edits, bounded live acquisition/caption selection, local Whisper transcription and process-isolated Sherpa diarization, provider-neutral [evidence-backed analysis](analysis.md), stable [speaker corrections, loopback Qwen previews and fitted replacement rendering](speaker-and-voice.md), supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed and NativeAOT-CLI verification each pass 51 checks. Windows Sherpa execution/cancellation, live WSL/CUDA Qwen synthesis/rendering and framework-dependent desktop snapshot execution have passed for their bounded configurations. The desktop shows exact still frames and persisted speaker edits; continuous A/V playback is not implemented. There is no standalone semantic provider. No remote or project license is selected.
 
 The [implementation brief](product-and-architecture.md) carries forward the complete discovery plan, including requirements, architecture boundaries, illustrative JSON, export semantics, reuse candidates, open questions and risks. The original [PLAN note](../../PLAN/inbox/roughcut.md) is historical discovery context; maintain new implementation decisions here.
 
-## Continue with diarization (RC-09)
+## Continue desktop review (RC-06)
 
 On 2026-09-19 the user added speaker distinction and voice replacement via Qwen TTS. The bounded RC-09 workflow runs Sherpa locally, persists stable cluster-to-project mappings and source/model/submission provenance, preserves reviewed assignments and redirects mappings after merges; CLI/MCP can synthesize or import, preview, apply/revert, preflight and render exact or bounded `time-stretch` replacements. Whisper remains responsible for transcript text and timing. A Windows x64 Sherpa CLI separated the official two-speaker fixture; native inference now runs in a child process so cancellation kills the process tree without changing the saved project. A WSL2/CUDA 1.7B CustomVoice preview has been rendered into exact 48 kHz output. Strict copy-only rejects replacements. Rendering requires a corrected, non-overlapping interval fully retained exactly once and the reviewed `require-isolated-dialogue` assertion. Source separation, background preservation inside the interval, fades and caption-text rewrite do not exist.
 
@@ -24,7 +24,7 @@ The bounded yt-dlp adapter, caption assessment/override and timed local-STT proc
 
 Extend the synthetic fixtures and executable test harness without personal media or downloads. Keep an explicit allow/reject policy so it will work through MCP without an interactive dialog. Build/run instructions and VS Code configurations now exist; keep them aligned with changes.
 
-VS Code has 30 launch options covering the stdio MCP host, current CLI commands including analysis save/automatic apply, diarization submission/local execution, speaker and voice synthesis/preview operations, acquisition/caption assessment/timeline preview, Whisper model preparation/transcription, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
+VS Code has 31 launch options covering the desktop review host, stdio MCP host, current CLI commands including analysis save/automatic apply, diarization submission/local execution, speaker and voice synthesis/preview operations, acquisition/caption assessment/timeline preview, Whisper model preparation/transcription, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
 
 ## Local environment observations
 
@@ -34,7 +34,7 @@ On 2026-09-19, SDK 10.0.300 and FFmpeg/FFprobe `2026-04-01-git-eedf8f0165-full_b
 
 The same toolchain passed the export regression suite. The fixture uses font-free visible frame IDs because font-based drawtext crashed this FFmpeg build. Copy selection scans from the beginning to avoid keyframe-seek audio preroll; do not reintroduce input-side seeking without the H.264/audio-copy regression. No Linux, disk-full or crash-durability result is claimed.
 
-Sibling Bantz, CupriFace, DNAX, MCPSharp and MCPHub directories were observed. Their presence does not verify clean working trees, branches, current compatibility or service health. Read their instructions/source when actually evaluating them. The dated [feasibility research](../../PLAN/knowledge/media/video-editing-feasibility-2026-09-18.md) records upstream observations and limitations; it is not a package lock or runtime test result.
+Sibling Bantz, DNAX, MCPSharp and MCPHub directories were observed but not adopted merely from their presence. CupriFace source was inspected for RC-06 without modification; its local MediaProbe lacked loadable native codec assets, while official 0.26.1 shell packages passed the bounded rendering tests recorded in the [desktop evidence](evidence/2026-09-19-desktop-review.md). Recheck instructions, source and working trees before further sibling-library work. The dated [feasibility research](../../PLAN/knowledge/media/video-editing-feasibility-2026-09-18.md) records upstream observations and limitations; it is not a package lock or runtime test result.
 
 ## Decisions that remain open
 
@@ -44,7 +44,7 @@ Sibling Bantz, CupriFace, DNAX, MCPSharp and MCPHub directories were observed. T
 | Broader export formats, delivery presets and snapping tolerance | Agent proposes; Wixely resolves product tradeoffs | After RC-02's bounded matrix; current implementation rejects unaligned cuts |
 | Standalone semantic/visual inference provider beyond MCP-supplied observations | Wixely | Optional RC-04 expansion; no implicit cloud disclosure |
 | representative diarization quality and background-aware replacement handling | Agent evaluates; Wixely supplies representative material and resolves tradeoffs | Remaining RC-09 implementation |
-| Desktop UI and playback backend | Agent, with Wixely on material tradeoffs | RC-06 feasibility gate |
+| Continuous desktop playback/audio backend and crop interaction | Agent, with Wixely on material tradeoffs | Remaining RC-06 feasibility gate |
 | Image transport/client support, payload limits and scope beyond timed still-image insertion | Agent validates contracts; Wixely resolves broader compositing scope | RC-10 feasibility |
 | Representative labelled ad-removal and multi-speaker examples with quality targets | Wixely / Agent | Semantic-quality and RC-09 acceptance |
 
@@ -52,4 +52,4 @@ None of these choices prevents defining contracts and the deterministic local ex
 
 ## Remaining work
 
-Remaining: representative diarization quality, interactive image-client acceptance, desktop UI, background-aware voice work, broader semantic/export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: build the minimal RC-06 desktop review UI and measure speaker/overlap error when fixtures are available; Wixely: provide representative multi-speaker and replacement examples**.
+Remaining: synchronized desktop playback and crop/general editing, representative diarization quality, interactive image-client acceptance, background-aware voice work, broader semantic/export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: add seekable synchronized A/V playback and crop interaction to RC-06 and measure speaker/overlap error when fixtures are available; Wixely: provide representative multi-speaker and replacement examples**.
