@@ -1,0 +1,18 @@
+{
+  "mapping": {
+    "id": "voice-1",
+    "speakerId": "speaker-1",
+    "provider": "qwen-tts",
+    "voice": "aiden",
+    "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "language": "English"
+  },
+  "replacement": {
+    "id": "replacement-1",
+    "segmentId": "speech-1",
+    "mappingId": "voice-1",
+    "text": "Replacement text",
+    "fitPolicy": "exact",
+    "backgroundPolicy": "require-isolated-dialogue"
+  }
+}

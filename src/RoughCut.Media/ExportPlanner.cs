@@ -18,7 +18,8 @@ public sealed class ExportPlanner(string ffmpeg = "ffmpeg", string ffprobe = "ff
         ExportPlan Rejected(string code, string message) => new(project.ProjectId, project.Revision, hash, project.ExportMode,
             project.TimeBase, false, false, [new(code, "export", message)], [], [], 0, 0, 0);
         if (project.Timeline.Length is 0 or > 32) return (Rejected("unsupported-timeline", "Export requires 1 to 32 clips."), null);
-        if (project.Replacements.Length != 0) return (Rejected("unsupported-voice-replacement", "Voice replacement rendering is not implemented; it also cannot be copy-only."), null);
+        if (project.Replacements.Any(item => item.State == "applied"))
+            return (Rejected("unsupported-voice-replacement", "Applied voice replacement rendering is not implemented; it also cannot be copy-only."), null);
         var assets = project.Assets.ToDictionary(asset => asset.Id, StringComparer.Ordinal);
         var activeVideoIds = project.Timeline.Where(clip => assets[clip.AssetId].Kind == "video").Select(clip => clip.AssetId).Distinct().ToArray();
         if (activeVideoIds.Length != 1 || project.Timeline.Any(clip => assets[clip.AssetId].Kind == "audio" ||

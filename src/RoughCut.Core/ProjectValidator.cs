@@ -16,9 +16,11 @@ public static class ProjectValidator
         Check(project.ExportMode is "prefer-stream-copy" or "copy-only" or "exact-edit", "exportMode", "Unknown export mode.");
         if (project.Assets.Any(x => x is null) || project.Timeline.Any(x => x is null) ||
             project.Speakers.Any(x => x is null) || project.Speech.Any(x => x is null) ||
+            project.SpeakerCorrections.Any(x => x is null) ||
             project.Evidence.Any(x => x is null) || project.Observations.Any(x => x is null) ||
             project.Proposals.Any(x => x is null) ||
             project.Voices.Any(x => x is null) || project.Replacements.Any(x => x is null) ||
+            project.Synthesis.Any(x => x is null) ||
             project.Provenance.Any(x => x is null))
         {
             issues.Add(new("invalid-project", "collections", "Null collection entries are not allowed."));
@@ -69,6 +71,18 @@ public static class ProjectValidator
             Check(!string.IsNullOrWhiteSpace(speaker.Label), speaker.Id, "Speaker label is required.");
         }
         var speakerIds = project.Speakers.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        Check(project.SpeakerCorrections.Length <= 10_000, "speakerCorrections", "Too many speaker correction records.");
+        ids.Clear();
+        foreach (var correction in project.SpeakerCorrections)
+        {
+            Id(correction.Id, "speakerCorrections.id");
+            Check(correction.Action is "add" or "rename" or "assign" or "merge", correction.Id, "Unknown speaker correction action.");
+            Check(correction.SegmentIds.Length <= 100 && correction.BeforeSpeakerIds.Length <= 8 && correction.AfterSpeakerIds.Length <= 8,
+                correction.Id, "Speaker correction references exceed their bounds.");
+            Check(!string.IsNullOrWhiteSpace(correction.Reason) && correction.Reason.Length <= 500,
+                correction.Id, "Speaker correction reason is required and bounded.");
+            Check(correction.Revision > 0 && correction.Revision <= project.Revision, correction.Id, "Speaker correction revision is invalid.");
+        }
         ids.Clear();
         foreach (var segment in project.Speech)
         {
@@ -185,8 +199,13 @@ public static class ProjectValidator
         {
             Id(voice.Id, "voices.id");
             Check(speakerIds.Contains(voice.SpeakerId), voice.Id, "Unknown speaker reference.");
-            Check(voice.Provider == "qwen-tts" && !string.IsNullOrWhiteSpace(voice.Voice), voice.Id, "A Qwen TTS voice configuration is required.");
+            Check(voice.Provider == "qwen-tts" && !string.IsNullOrWhiteSpace(voice.Voice) && voice.Voice.Length <= 256 &&
+                !string.IsNullOrWhiteSpace(voice.Model) && voice.Model.Length <= 256 &&
+                !string.IsNullOrWhiteSpace(voice.Language) && voice.Language.Length <= 64,
+                voice.Id, "A bounded Qwen TTS voice, model and language configuration is required.");
         }
+        Check(project.Voices.Select(item => item.SpeakerId).Distinct(StringComparer.Ordinal).Count() == project.Voices.Length,
+            "voices", "Each speaker can have at most one voice mapping.");
         ids.Clear();
         foreach (var replacement in project.Replacements)
         {
@@ -196,9 +215,40 @@ public static class ProjectValidator
             Check(segment is not null && voice is not null && segment.SpeakerIds.Contains(voice.SpeakerId),
                 replacement.Id, "Replacement voice must match a speaker assigned to the speech segment.");
             Check(!string.IsNullOrWhiteSpace(replacement.Text), replacement.Id, "Synthesis text is required.");
+            Check(replacement.Text.Length <= 4096 && replacement.State is "requested" or "preview" or "applied" or "reverted",
+                replacement.Id, "Replacement text or state is invalid.");
+            Check(replacement.FitPolicy == "exact", replacement.Id, "Only exact-duration voice replacement is supported.");
+            Check(replacement.BackgroundPolicy == "require-isolated-dialogue", replacement.Id,
+                "Voice replacement requires the isolated-dialogue background policy.");
             Check(replacement.GeneratedAssetId is null || (assets.TryGetValue(replacement.GeneratedAssetId, out var audio) && audio.Kind == "audio"),
                 replacement.Id, "Generated speech must reference an audio asset.");
+            Check(replacement.State == "requested" ? replacement.GeneratedAssetId is null : replacement.GeneratedAssetId is not null,
+                replacement.Id, "Requested replacements have no preview asset; later states require one.");
         }
+        Check(project.Synthesis.Length <= project.Replacements.Length, "synthesis", "Synthesis provenance exceeds replacement requests.");
+        ids.Clear();
+        foreach (var synthesis in project.Synthesis)
+        {
+            Id(synthesis.ReplacementId, "synthesis.replacementId");
+            var replacement = project.Replacements.SingleOrDefault(item => item.Id == synthesis.ReplacementId);
+            var mapping = replacement is null ? null : project.Voices.SingleOrDefault(item => item.Id == replacement.MappingId);
+            var generated = replacement?.GeneratedAssetId is null ? null : project.Assets.SingleOrDefault(item => item.Id == replacement.GeneratedAssetId);
+            Check(replacement is not null && generated?.Kind == "audio", synthesis.ReplacementId,
+                "Synthesis provenance must reference a replacement with generated audio.");
+            Check(mapping is not null && synthesis.Provider == mapping.Provider && synthesis.Model == mapping.Model &&
+                synthesis.Voice == mapping.Voice && synthesis.Language == mapping.Language,
+                synthesis.ReplacementId, "Synthesis provider settings must match the voice mapping.");
+            Check(!string.IsNullOrWhiteSpace(synthesis.Runtime) && synthesis.Runtime.Length <= 256,
+                synthesis.ReplacementId, "Synthesis runtime is required and bounded.");
+            Check(synthesis.TextSha256.Length == 64 && synthesis.TextSha256.All(Uri.IsHexDigit) &&
+                synthesis.AudioSha256.Length == 64 && synthesis.AudioSha256.All(Uri.IsHexDigit) &&
+                generated is not null && string.Equals(generated.Sha256, synthesis.AudioSha256, StringComparison.OrdinalIgnoreCase),
+                synthesis.ReplacementId, "Synthesis hashes are invalid or do not match generated audio.");
+            Check(synthesis.RequestedDuration > 0 && synthesis.ActualDuration > 0 && synthesis.FitPolicy == replacement?.FitPolicy,
+                synthesis.ReplacementId, "Synthesis duration or fit provenance is invalid.");
+        }
+        Check(project.Replacements.All(item => item.State == "requested" || project.Synthesis.Any(p => p.ReplacementId == item.Id)),
+            "synthesis", "Every generated voice preview requires synthesis provenance.");
         foreach (var provenance in project.Provenance)
             Check(assets.ContainsKey(provenance.AssetId) && (provenance.SourceAssetId is null || assets.ContainsKey(provenance.SourceAssetId)),
                 "provenance", "Unknown provenance asset reference.");

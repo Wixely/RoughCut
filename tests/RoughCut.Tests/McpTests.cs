@@ -2,6 +2,7 @@ using System.Text.Json;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using RoughCut.Application;
+using RoughCut.Core;
 
 internal static class McpTests
 {
@@ -29,9 +30,74 @@ internal static class McpTests
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
                 "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
                 "roughcut_save_analysis", "roughcut_apply_analysis",
+                "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
+                "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
                 "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
+        });
+
+        await check("MCP corrects speakers and carries a reversible voice preview", async () =>
+        {
+            var path = Path.Combine(root, "mcp-voice-project.json");
+            var project = new EditProject
+            {
+                ProjectId = "mcp-voice",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "source.mkv", new string('a', 64), 3000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 3000)],
+                Speakers = [new("speaker-1", "Speaker 1")],
+                Speech = [new("speech-1", "source", 0, 1000, "Replacement text", ["speaker-1"], "corrected")]
+            };
+            await new ProjectStore().SaveAsync(path, project, 0);
+            await using var client = await CreateClientAsync(command, arguments);
+            var corrected = await client.CallToolAsync("roughcut_edit_speakers", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-voice-project.json",
+                ["expectedRevision"] = 1L,
+                ["edits"] = JsonDocument.Parse("""[{"action":"rename","speakerId":"speaker-1","label":"Host","reason":"reviewed label"}]""").RootElement.Clone()
+            });
+            Assert(corrected.IsError != true, "MCP speaker correction failed.");
+            var planned = await client.CallToolAsync("roughcut_plan_voice_replacement", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-voice-project.json",
+                ["expectedRevision"] = 2L,
+                ["submission"] = JsonDocument.Parse("""{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"exact","backgroundPolicy":"require-isolated-dialogue"}}""").RootElement.Clone()
+            });
+            Assert(planned.IsError != true, "MCP voice plan failed.");
+            var imported = await client.CallToolAsync("roughcut_import_voice_preview", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-voice-project.json",
+                ["expectedRevision"] = 3L,
+                ["replacementId"] = "replacement-1",
+                ["base64Wav"] = Convert.ToBase64String(TestAudio.PcmWave()),
+                ["runtime"] = "fixture-qwen-runtime"
+            });
+            Assert(imported.IsError != true, "MCP voice preview import failed.");
+            var preview = await client.CallToolAsync("roughcut_get_voice_preview", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-voice-project.json",
+                ["expectedRevision"] = 4L,
+                ["replacementId"] = "replacement-1"
+            });
+            Assert(preview.IsError != true && preview.Content.OfType<AudioContentBlock>().Single().DecodedData.Span.SequenceEqual(TestAudio.PcmWave()),
+                "MCP did not return decodable voice preview audio.");
+            var applied = await client.CallToolAsync("roughcut_set_voice_replacement_state", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-voice-project.json",
+                ["expectedRevision"] = 4L,
+                ["replacementId"] = "replacement-1",
+                ["state"] = "applied"
+            });
+            Assert(applied.IsError != true, "MCP voice preview apply failed.");
+            var reverted = await client.CallToolAsync("roughcut_set_voice_replacement_state", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "mcp-voice-project.json",
+                ["expectedRevision"] = 5L,
+                ["replacementId"] = "replacement-1",
+                ["state"] = "reverted"
+            });
+            Assert(reverted.IsError != true, "MCP voice replacement revert failed.");
         });
 
         await check("MCP returns a decodable frame image and exact timing metadata", async () =>

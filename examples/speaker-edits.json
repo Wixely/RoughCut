@@ -1,0 +1,8 @@
+[
+  {
+    "action": "rename",
+    "speakerId": "speaker-1",
+    "label": "Host",
+    "reason": "Reviewed speaker label"
+  }
+]

@@ -62,6 +62,83 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return edited;
     }
 
+    public async Task<EditProject> ApplySpeakerEditsAsync(string projectPath, long expectedRevision,
+        SpeakerEdit[] edits, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var edited = SpeakerEditor.Apply(project, edits);
+        await _store.SaveAsync(path, edited, expectedRevision, token);
+        return edited;
+    }
+
+    public async Task<EditProject> PlanVoiceAsync(string projectPath, long expectedRevision,
+        VoicePlanSubmission submission, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var edited = VoicePlanner.Plan(project, submission);
+        await _store.SaveAsync(path, edited, expectedRevision, token);
+        return edited;
+    }
+
+    public async Task<EditProject> ImportVoicePreviewAsync(string projectPath, long expectedRevision,
+        string replacementId, string base64Wav, string runtime, CancellationToken token = default)
+    {
+        if (string.IsNullOrWhiteSpace(base64Wav) || base64Wav.Length > ((WaveAudio.MaxBytes + 2) / 3) * 4)
+            throw new InvalidDataException("Encoded voice preview exceeds the 16 MiB WAVE limit.");
+        byte[] wav;
+        try { wav = Convert.FromBase64String(base64Wav); }
+        catch (FormatException) { throw new InvalidDataException("Voice preview is not valid base64."); }
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var result = VoiceWorkflow.ImportPreview(project, path, replacementId, wav, runtime);
+        try { await _store.SaveAsync(path, result.Project, expectedRevision, token); }
+        catch
+        {
+            var referenced = false;
+            try { referenced = (await _store.LoadAsync(path, CancellationToken.None)).Assets.Any(item => item.Path == result.RelativePath); }
+            catch (Exception) { referenced = true; }
+            var destination = ProjectFiles.Resolve(path, result.RelativePath);
+            if (result.Created && !referenced && File.Exists(destination)) File.Delete(destination);
+            throw;
+        }
+        return result.Project;
+    }
+
+    public async Task<VoicePreviewAudio> GetVoicePreviewAsync(string projectPath, long expectedRevision,
+        string replacementId, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var replacement = project.Replacements.SingleOrDefault(item => item.Id == replacementId)
+            ?? throw new KeyNotFoundException("Voice replacement was not found.");
+        var provenance = project.Synthesis.SingleOrDefault(item => item.ReplacementId == replacementId)
+            ?? throw new InvalidOperationException("Voice replacement has no generated preview.");
+        var asset = project.Assets.Single(item => item.Id == replacement.GeneratedAssetId);
+        var wav = await ProjectFiles.ReadBoundedAsync(ProjectFiles.Resolve(path, asset.Path), WaveAudio.MaxBytes, token);
+        if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(wav)), asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Generated voice preview changed after it was imported.");
+        WaveAudio.Inspect(wav);
+        return new(new(replacement.Id, asset.Id, replacement.State, replacement.FitPolicy,
+            provenance.RequestedDuration, provenance.ActualDuration, asset.MediaType), wav);
+    }
+
+    public async Task<EditProject> SetVoiceStateAsync(string projectPath, long expectedRevision,
+        string replacementId, string state, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var edited = VoicePlanner.SetState(project, replacementId, state);
+        await _store.SaveAsync(path, edited, expectedRevision, token);
+        return edited;
+    }
+
     public async Task<AnalysisPlanResult> SaveAnalysisAsync(string projectPath, long expectedRevision,
         string prompt, string policy, AnalysisSubmission submission, CancellationToken token = default)
     {

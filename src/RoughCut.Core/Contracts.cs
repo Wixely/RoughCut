@@ -29,6 +29,12 @@ public sealed record TimelineClip(
     string Id, string AssetId, long In, long Out, Crop? Crop = null,
     string Fit = "contain", string Audio = "source");
 public sealed record Speaker(string Id, string Label);
+public sealed record SpeakerEdit(string Action, string? SpeakerId = null, string? TargetSpeakerId = null,
+    string? Label = null, string[]? SegmentIds = null, string[]? SpeakerIds = null,
+    bool Overlap = false, string Reason = "user-correction");
+public sealed record SpeakerCorrection(string Id, string Action, string[] SegmentIds,
+    string[] BeforeSpeakerIds, string[] AfterSpeakerIds, string? BeforeLabel,
+    string? AfterLabel, string Reason, long Revision);
 public sealed record SpeechSegment(
     string Id, string AssetId, long Start, long End, string Text, string[] SpeakerIds,
     string Assignment = "unknown", bool Overlap = false);
@@ -45,9 +51,20 @@ public sealed record AnalysisProvenance(string AssetId, string SourceSha256, str
 public sealed record AnalysisSubmission(string AssetId, string Provider, string Model,
     AnalysisEvidence[] Evidence, AnalysisObservation[] Observations);
 public sealed record AnalysisPlanResult(EditProject Project, int RemoveDecisions, int ReviewDecisions, int RetainDecisions);
-public sealed record VoiceMapping(string Id, string SpeakerId, string Provider, string Voice);
+public sealed record VoiceMapping(string Id, string SpeakerId, string Provider, string Voice,
+    string Model = "unspecified", string Language = "Auto");
 public sealed record VoiceReplacement(
-    string Id, string SegmentId, string MappingId, string Text, string? GeneratedAssetId = null);
+    string Id, string SegmentId, string MappingId, string Text, string? GeneratedAssetId = null,
+    string State = "requested", string FitPolicy = "exact",
+    string BackgroundPolicy = "require-isolated-dialogue");
+public sealed record VoiceReplacementRequest(string Id, string SegmentId, string MappingId, string Text,
+    string FitPolicy = "exact", string BackgroundPolicy = "require-isolated-dialogue");
+public sealed record VoicePlanSubmission(VoiceMapping Mapping, VoiceReplacementRequest Replacement);
+public sealed record SynthesisProvenance(string ReplacementId, string Provider, string Model,
+    string Runtime, string Voice, string Language, string TextSha256, string AudioSha256,
+    long RequestedDuration, long ActualDuration, string FitPolicy);
+public sealed record VoicePreviewInfo(string ReplacementId, string AssetId, string State,
+    string FitPolicy, long RequestedDuration, long ActualDuration, string MediaType);
 public sealed record AssetProvenance(string AssetId, string Provider, string ModelVersion, string? SourceAssetId = null);
 public sealed record TimelineMapping(string ClipId, string AssetId, long SourceIn, long SourceOut, long OutputIn, long OutputOut);
 public sealed record ValidationIssue(string Code, string Location, string Message);
@@ -62,6 +79,7 @@ public sealed record EditProject
     public MediaAsset[] Assets { get; init; } = [];
     public TimelineClip[] Timeline { get; init; } = [];
     public Speaker[] Speakers { get; init; } = [];
+    public SpeakerCorrection[] SpeakerCorrections { get; init; } = [];
     public SpeechSegment[] Speech { get; init; } = [];
     public TranscriptionProvenance? Transcription { get; init; }
     public AnalysisEvidence[] Evidence { get; init; } = [];
@@ -70,6 +88,7 @@ public sealed record EditProject
     public AnalysisProvenance? Analysis { get; init; }
     public VoiceMapping[] Voices { get; init; } = [];
     public VoiceReplacement[] Replacements { get; init; } = [];
+    public SynthesisProvenance[] Synthesis { get; init; } = [];
     public AssetProvenance[] Provenance { get; init; } = [];
     public CaptionTrack? Captions { get; init; }
     public string ExportMode { get; init; } = "prefer-stream-copy";
@@ -94,6 +113,11 @@ public sealed record TimelineFrameInfo(
 [JsonSerializable(typeof(FrameInfo))]
 [JsonSerializable(typeof(TimelineFrameInfo))]
 [JsonSerializable(typeof(EditOperation[]))]
+[JsonSerializable(typeof(SpeakerEdit[]))]
+[JsonSerializable(typeof(VoiceMapping))]
+[JsonSerializable(typeof(VoiceReplacementRequest))]
+[JsonSerializable(typeof(VoicePlanSubmission))]
+[JsonSerializable(typeof(VoicePreviewInfo))]
 [JsonSerializable(typeof(CaptionCandidate[]))]
 [JsonSerializable(typeof(CaptionSelectionResult))]
 [JsonSerializable(typeof(AnalysisSubmission))]

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using RoughCut.Application;
 using RoughCut.Core;
 using RoughCut.Media;
@@ -45,7 +47,9 @@ static EditProject Fixture() => new()
     Speech = [new("speech-1", "video", 1000, 2000, "Synthetic speech", ["speaker-1"], "corrected")],
     Transcription = new("video", new string('a', 64), "fixture-stt", "fixture-model", "en", 30),
     Voices = [new("voice-1", "speaker-1", "qwen-tts", "configured-voice")],
-    Replacements = [new("replacement-1", "speech-1", "voice-1", "Synthetic speech", "audio")],
+    Replacements = [new("replacement-1", "speech-1", "voice-1", "Synthetic speech", "audio", "applied", "exact")],
+    Synthesis = [new("replacement-1", "qwen-tts", "unspecified", "fixture-only", "configured-voice", "Auto",
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("Synthetic speech"))), new string('c', 64), 1000, 1000, "exact")],
     Provenance = [new("audio", "qwen-tts", "fixture-only", "video")]
 };
 var store = new ProjectStore();
@@ -222,6 +226,53 @@ await Check("Analysis proposals retain uncertainty and apply only revision-bound
         automatic.Project with { Revision = 3 })));
 });
 
+await Check("Speaker corrections and voice previews are revisioned and reversible", async () =>
+{
+    var path = Path.Combine(testRoot, "voice-project.json");
+    var fixture = Fixture();
+    var project = fixture with
+    {
+        ProjectId = "voice-workflow",
+        Assets = [fixture.Assets[0]],
+        Timeline = [new("clip", "video", 0, 3000)],
+        Voices = [],
+        Replacements = [],
+        Synthesis = [],
+        Provenance = []
+    };
+    await store.SaveAsync(path, project, 0);
+    var operations = new RoughCutOperations(new WorkspaceBoundary(testRoot));
+    var corrected = await operations.ApplySpeakerEditsAsync(Path.GetFileName(path), 1,
+    [
+        new("add", SpeakerId: "speaker-2", Label: "Guest", Reason: "split reviewed speaker"),
+        new("assign", SegmentIds: ["speech-1"], SpeakerIds: ["speaker-2"], Reason: "reviewed segment")
+    ]);
+    Assert(corrected.Speech.Single().SpeakerIds.SequenceEqual(["speaker-2"]) && corrected.SpeakerCorrections.Length == 2,
+        "Speaker assignment or correction history was not persisted.");
+    var planned = await operations.PlanVoiceAsync(Path.GetFileName(path), 2,
+        new(new("voice-2", "speaker-2", "qwen-tts", "aiden", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "English"),
+            new("replace-1", "speech-1", "voice-2", "Replacement text")));
+    Assert(planned.Replacements.Single().State == "requested", "Voice request was not planned.");
+    var imported = await operations.ImportVoicePreviewAsync(Path.GetFileName(path), 3, "replace-1",
+        Convert.ToBase64String(TestAudio.PcmWave()), "fixture-qwen-runtime");
+    Assert(imported.Replacements.Single().State == "preview" && imported.Synthesis.Single().RequestedDuration == 1000 &&
+        imported.Synthesis.Single().ActualDuration == 1000, "Voice preview provenance or exact duration is wrong.");
+    var preview = await operations.GetVoicePreviewAsync(Path.GetFileName(path), 4, "replace-1");
+    Assert(preview.Wav.SequenceEqual(TestAudio.PcmWave()) && preview.Info.State == "preview", "Voice preview did not round-trip.");
+    var applied = await operations.SetVoiceStateAsync(Path.GetFileName(path), 4, "replace-1", "applied");
+    Assert(applied.Replacements.Single().State == "applied", "Voice preview was not applied.");
+    var reverted = await operations.SetVoiceStateAsync(Path.GetFileName(path), 5, "replace-1", "reverted");
+    Assert(reverted.Replacements.Single().State == "reverted", "Voice replacement was not reverted.");
+    var mismatched = reverted with
+    {
+        Replacements = [reverted.Replacements.Single() with { State = "preview" }],
+        Synthesis = [reverted.Synthesis.Single() with { ActualDuration = 500 }]
+    };
+    await Throws<NotSupportedException>(() => Task.FromResult(VoicePlanner.SetState(mismatched, "replace-1", "applied")));
+    await Throws<InvalidDataException>(() => Task.Run(() => WaveAudio.Inspect("not-wave"u8)));
+    await Throws<RevisionConflictException>(() => operations.SetVoiceStateAsync(Path.GetFileName(path), 5, "replace-1", "applied"));
+});
+
 if (args.Contains("--media", StringComparer.Ordinal))
 {
     var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
@@ -289,6 +340,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
             Transcription = null,
             Voices = [],
             Replacements = [],
+            Synthesis = [],
             Captions = null
         }, 0);
         var saved = await new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg)
@@ -400,6 +452,33 @@ if (args.Contains("--media", StringComparer.Ordinal))
             var analysisApplied = await store.LoadAsync(projectPath);
             Assert(analysisApplied.Revision == 5 && analysisApplied.Proposals.Length == 0 && analysisApplied.Timeline.Length == 2,
                 "CLI did not apply the explicitly reviewed proposal.");
+
+            var voiceProjectPath = Path.Combine(testRoot, "cli-voice-project.json");
+            await store.SaveAsync(voiceProjectPath, new EditProject
+            {
+                ProjectId = "cli-voice",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "synthetic clip.mkv", await MediaReader.FingerprintAsync(source), 2000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 2000)],
+                Speakers = [new("speaker-1", "Speaker 1")],
+                Speech = [new("speech-1", "source", 0, 1000, "Replacement text", ["speaker-1"], "corrected")]
+            }, 0);
+            var speakerEdits = Path.Combine(testRoot, "cli-speakers.json");
+            await File.WriteAllTextAsync(speakerEdits, """[{"action":"rename","speakerId":"speaker-1","label":"Host","reason":"reviewed label"}]""");
+            await RunCli("speaker-edit", voiceProjectPath, speakerEdits, "1");
+            var voicePlan = Path.Combine(testRoot, "cli-voice-plan.json");
+            await File.WriteAllTextAsync(voicePlan, """{"mapping":{"id":"voice-1","speakerId":"speaker-1","provider":"qwen-tts","voice":"aiden","model":"Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice","language":"English"},"replacement":{"id":"replacement-1","segmentId":"speech-1","mappingId":"voice-1","text":"Replacement text","fitPolicy":"exact","backgroundPolicy":"require-isolated-dialogue"}}""");
+            await RunCli("voice-plan", voiceProjectPath, voicePlan, "2");
+            var wavPath = Path.Combine(testRoot, "qwen-preview.wav");
+            await File.WriteAllBytesAsync(wavPath, TestAudio.PcmWave());
+            await RunCli("voice-preview-import", voiceProjectPath, "replacement-1", wavPath, "3", "fixture-qwen-runtime");
+            var previewPath = Path.Combine(testRoot, "cli-preview.wav");
+            await RunCli("voice-preview", voiceProjectPath, "4", "replacement-1", previewPath);
+            Assert((await File.ReadAllBytesAsync(previewPath)).SequenceEqual(TestAudio.PcmWave()), "CLI voice preview bytes changed.");
+            await RunCli("voice-state", voiceProjectPath, "4", "replacement-1", "applied");
+            await RunCli("voice-state", voiceProjectPath, "5", "replacement-1", "reverted");
+            Assert((await store.LoadAsync(voiceProjectPath)).Replacements.Single().State == "reverted",
+                "CLI voice workflow did not preserve reversible state.");
         });
     }
 }

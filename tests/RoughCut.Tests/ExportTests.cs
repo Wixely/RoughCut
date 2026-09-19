@@ -161,10 +161,13 @@ internal static class ExportTests
             Assert(!(await planner.PreflightAsync(unaligned, projectPath)).Supported, "Unaligned cut accepted.");
             var voices = project with
             {
+                Assets = [.. project.Assets, new("voice-audio", "audio", "voice.wav", new string('d', 64), 1000, 0, 0, "audio/wav")],
                 Speakers = [new("s", "Speaker")],
                 Speech = [new("s1", "source-1", 0, 1000, "text", ["s"], "corrected")],
                 Voices = [new("v", "s", "qwen-tts", "voice")],
-                Replacements = [new("r", "s1", "v", "text")]
+                Replacements = [new("r", "s1", "v", "text", "voice-audio", "applied", "exact")],
+                Synthesis = [new("r", "qwen-tts", "unspecified", "fixture", "voice", "Auto",
+                    Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("text"u8.ToArray())), new string('d', 64), 1000, 1000, "exact")]
             };
             Assert((await planner.PreflightAsync(voices, projectPath)).Issues[0].Code == "unsupported-voice-replacement", "Voice rendering silently omitted.");
             var image = project with

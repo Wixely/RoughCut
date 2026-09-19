@@ -33,6 +33,11 @@ try
                   captions-select <project.json> <asset-id> <candidates.json> <expected-revision> <preferred-language> [override-candidate-id]
                   analyse <project.json> <submission.json> <expected-revision> <review|auto-high-certainty> <prompt>
                   analysis-apply <project.json> <expected-revision> [proposal-id ...]
+                  speaker-edit <project.json> <speaker-edits.json> <expected-revision>
+                  voice-plan <project.json> <voice-plan.json> <expected-revision>
+                  voice-preview-import <project.json> <replacement-id> <preview.wav> <expected-revision> <runtime>
+                  voice-preview <project.json> <expected-revision> <replacement-id> <new-output.wav>
+                  voice-state <project.json> <expected-revision> <replacement-id> <applied|reverted>
                   acquire <url> <new-output-directory> [deno-executable]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
@@ -120,6 +125,69 @@ try
                 var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
                 var edited = await operations.ApplyAnalysisAsync(Path.GetFileName(fullProjectPath),
                     long.Parse(expected, CultureInfo.InvariantCulture), proposalIds.Length == 0 ? null : proposalIds, token);
+                Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["speaker-edit", var path, var editsPath, var expected]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var edits = JsonSerializer.Deserialize(
+                    await ProjectFiles.ReadBoundedAsync(editsPath, ProjectStore.MaxDocumentBytes, token),
+                    ProjectJson.Default.SpeakerEditArray) ?? throw new InvalidDataException("Speaker edits cannot be null.");
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var edited = await operations.ApplySpeakerEditsAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), edits, token);
+                Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["voice-plan", var path, var submissionPath, var expected]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var submission = JsonSerializer.Deserialize(
+                    await ProjectFiles.ReadBoundedAsync(submissionPath, ProjectStore.MaxDocumentBytes, token),
+                    ProjectJson.Default.VoicePlanSubmission) ?? throw new InvalidDataException("Voice plan cannot be null.");
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var edited = await operations.PlanVoiceAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), submission, token);
+                Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["voice-preview-import", var path, var replacementId, var wavPath, var expected, var runtime]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var wav = await ProjectFiles.ReadBoundedAsync(wavPath, WaveAudio.MaxBytes, token);
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var edited = await operations.ImportVoicePreviewAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), replacementId, Convert.ToBase64String(wav), runtime, token);
+                Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["voice-preview", var path, var expected, var replacementId, var outputPath]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var preview = await operations.GetVoicePreviewAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), replacementId, token);
+                outputPath = Path.GetFullPath(outputPath);
+                if (File.Exists(outputPath)) throw new IOException("Output already exists; choose a new output path.");
+                Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                var temporaryPath = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    await File.WriteAllBytesAsync(temporaryPath, preview.Wav, token);
+                    token.ThrowIfCancellationRequested();
+                    File.Move(temporaryPath, outputPath, overwrite: false);
+                }
+                finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+                Console.WriteLine(JsonSerializer.Serialize(preview.Info, ProjectJson.Default.VoicePreviewInfo));
+                break;
+            }
+        case ["voice-state", var path, var expected, var replacementId, var state]:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!), ffmpeg, ffprobe);
+                var edited = await operations.SetVoiceStateAsync(Path.GetFileName(fullProjectPath),
+                    long.Parse(expected, CultureInfo.InvariantCulture), replacementId, state, token);
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }

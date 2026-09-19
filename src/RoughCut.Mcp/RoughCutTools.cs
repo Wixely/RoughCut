@@ -101,6 +101,54 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         => TextAsync(() => operations.ApplyAnalysisAsync(projectPath, expectedRevision, proposalIds, cancellationToken),
             ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_edit_speakers")]
+    [Description("Atomically add, rename, assign or merge stable speaker labels and persist correction history against the expected revision.")]
+    public Task<CallToolResult> EditSpeakersAsync(string projectPath, long expectedRevision, SpeakerEdit[] edits,
+        CancellationToken cancellationToken) => TextAsync(
+            () => operations.ApplySpeakerEditsAsync(projectPath, expectedRevision, edits, cancellationToken),
+            ProjectJson.Default.EditProject);
+
+    [McpServerTool(Name = "roughcut_plan_voice_replacement")]
+    [Description("Create a Qwen TTS voice mapping and a reversible exact-duration replacement request for corrected, non-overlapping isolated dialogue.")]
+    public Task<CallToolResult> PlanVoiceReplacementAsync(string projectPath, long expectedRevision,
+        VoicePlanSubmission submission, CancellationToken cancellationToken) => TextAsync(
+            () => operations.PlanVoiceAsync(projectPath, expectedRevision, submission, cancellationToken),
+            ProjectJson.Default.EditProject);
+
+    [McpServerTool(Name = "roughcut_import_voice_preview")]
+    [Description("Import bounded base64 PCM WAVE output from a Qwen TTS runtime as a content-addressed preview with model/runtime/text/audio/duration provenance.")]
+    public Task<CallToolResult> ImportVoicePreviewAsync(string projectPath, long expectedRevision,
+        string replacementId, string base64Wav, string runtime, CancellationToken cancellationToken) => TextAsync(
+            () => operations.ImportVoicePreviewAsync(projectPath, expectedRevision, replacementId, base64Wav, runtime, cancellationToken),
+            ProjectJson.Default.EditProject);
+
+    [McpServerTool(Name = "roughcut_get_voice_preview", ReadOnly = true)]
+    [Description("Return generated voice preview audio and exact requested/actual duration metadata for an expected project revision.")]
+    public async Task<CallToolResult> GetVoicePreviewAsync(string projectPath, long expectedRevision,
+        string replacementId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var preview = await operations.GetVoicePreviewAsync(projectPath, expectedRevision, replacementId, cancellationToken);
+            return new()
+            {
+                Content =
+                [
+                    new TextContentBlock { Text = JsonSerializer.Serialize(preview.Info, ProjectJson.Default.VoicePreviewInfo) },
+                    AudioContentBlock.FromBytes(preview.Wav, "audio/wav")
+                ]
+            };
+        }
+        catch (Exception exception) { return Error(exception); }
+    }
+
+    [McpServerTool(Name = "roughcut_set_voice_replacement_state")]
+    [Description("Apply or revert an imported voice preview. Applying requires exact duration; export remains explicitly unsupported while applied.")]
+    public Task<CallToolResult> SetVoiceReplacementStateAsync(string projectPath, long expectedRevision,
+        string replacementId, string state, CancellationToken cancellationToken) => TextAsync(
+            () => operations.SetVoiceStateAsync(projectPath, expectedRevision, replacementId, state, cancellationToken),
+            ProjectJson.Default.EditProject);
+
     [McpServerTool(Name = "roughcut_acquire_url")]
     [Description("Acquire one HTTP(S) video plus available subtitles through a configured standalone yt-dlp into a new bounded workspace directory.")]
     public Task<CallToolResult> AcquireAsync(string sourceUrl, string destinationDirectory,

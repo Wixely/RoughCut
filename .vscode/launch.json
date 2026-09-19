@@ -289,6 +289,56 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: edit speakers",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["speaker-edit", "${input:projectPath}", "${input:speakerEditsPath}", "${input:expectedRevision}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: plan voice replacement",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-plan", "${input:projectPath}", "${input:voicePlanPath}", "${input:expectedRevision}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: import voice preview",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-preview-import", "${input:projectPath}", "${input:replacementId}", "${input:voicePreviewPath}", "${input:expectedRevision}", "${input:qwenRuntime}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: get voice preview",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-preview", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}", "${input:voicePreviewOutput}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: apply voice preview",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-state", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}", "applied"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: export without encoding",
       "type": "coreclr",
       "request": "launch",
@@ -463,6 +513,42 @@
       "type": "promptString",
       "description": "New export directory (must not already exist)",
       "default": "artifacts/demo/export"
+    },
+    {
+      "id": "speakerEditsPath",
+      "type": "promptString",
+      "description": "Speaker edit batch JSON",
+      "default": "examples/speaker-edits.json"
+    },
+    {
+      "id": "voicePlanPath",
+      "type": "promptString",
+      "description": "Qwen voice mapping and replacement request JSON",
+      "default": "examples/voice-plan.json"
+    },
+    {
+      "id": "replacementId",
+      "type": "promptString",
+      "description": "Voice replacement ID",
+      "default": "replacement-1"
+    },
+    {
+      "id": "voicePreviewPath",
+      "type": "promptString",
+      "description": "Generated PCM WAVE preview to import",
+      "default": "artifacts/demo/qwen-preview.wav"
+    },
+    {
+      "id": "voicePreviewOutput",
+      "type": "promptString",
+      "description": "New WAVE output path for preview",
+      "default": "artifacts/demo/voice-preview.wav"
+    },
+    {
+      "id": "qwenRuntime",
+      "type": "promptString",
+      "description": "Exact Qwen runtime and version that generated the WAVE",
+      "default": "faster-qwen3-tts@0.2.6"
     }
   ]
 }
