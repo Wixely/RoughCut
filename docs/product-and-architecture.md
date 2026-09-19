@@ -2,7 +2,7 @@
 
 Adapted from the PLAN discovery note on 2026-09-18. This is the canonical implementation brief; preserve the distinction between confirmed requirements and proposals. See [handoff](handoff.md) for current state and [work queue](work-queue.md) for execution order.
 
-- Status: Core/media/CLI foundation and bounded edit/export slice verified on Windows; full MVP incomplete
+- Status: Core/media/CLI, bounded edit/export, live local STT and provider-neutral analysis slices verified on Windows; full MVP incomplete
 - Name: RoughCut (confirmed by the user on 2026-09-18)
 - Captured: 2026-09-18
 - Last reviewed: 2026-09-19
@@ -84,6 +84,7 @@ The analyser produces reusable, time-indexed observations even when no edit is r
 - Keep speech segments, visual shots and semantic sections as distinct intervals; they need not share boundaries. Preserve their relationships and original source timestamps.
 - Store labels such as sponsorship, introduction, repeated take, dead air or topic change with supporting transcript/frame references, provider/model version and uncertainty. Do not present uncalibrated model scores as measured probabilities.
 - Use a replaceable inference interface for semantic and optional visual analysis. The model can be supplied by a configured local endpoint or an MCP caller; which mode the standalone desktop defaults to is open. Local STT does not imply that all AI inference is local.
+- The bounded implementation accepts provider-neutral evidence and observations through CLI/MCP, records qualitative certainty and applies revision-bound conservative policies. MCP-supplied observations are the first accepted provider mode; a standalone semantic model remains optional and undecided.
 - For long videos, use bounded chunks with overlap and context summaries, reconcile duplicate observations, and map all timestamps back to the original media. Cache observations by source fingerprint and analysis configuration. Do not load the complete decoded video or audio into RAM.
 - Preserve sentence endings and context when proposing cuts. Show tradeoffs if a safe-copy boundary would retain an ad fragment or remove useful speech.
 
@@ -232,4 +233,4 @@ See [dated source verification](../../PLAN/knowledge/media/video-editing-feasibi
 4. **Agent:** Add MCP job operations and the desktop preview; prove Windows/Linux and headless parity before promoting to an application release.
 5. **Wixely / Agent:** Resolve open product/dependency choices and remote hosting when needed. The local repository exists; promote the PLAN pointer under its chosen host only after that host is selected. Plan web/Docker against the same contracts.
 
-The initial contract/frame, bounded image-aware export, stdio MCP/job and live RC-03 acquisition/caption/local-STT slices are implemented; the preceding discovery sequence remains context for the broader product. Recommended next action: **Agent** should implement RC-04 evidence-backed analysis proposals, with **Wixely** providing a representative labelled ad-removal example. Richer speech contracts, UI, model integrations and broader media/platform acceptance remain.
+The initial contract/frame, bounded image-aware export, stdio MCP/job, live RC-03 acquisition/local-STT and provider-neutral RC-04 analysis slices are implemented; the preceding discovery sequence remains context for the broader product. Recommended next action: **Agent** should extend speaker correction/synthesis provenance and begin RC-09 feasibility, with **Wixely** providing representative labelled ad-removal and multi-speaker examples. UI, model integrations and broader media/platform acceptance remain.

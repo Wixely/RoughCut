@@ -81,4 +81,4 @@ Before publication, the exporter checks every output presentation timestamp and 
 
 Run `.\scripts\verify.ps1 -PublishAot` for the synthetic regression suite. The export fixture has visible binary frame IDs, a changing-frequency audio signal and supplied captions. The independent frame-ID check verifies the reorder around the join; production validation additionally checks every pixel hash, selected PCM sample and copied packet payload.
 
-Next owner/action: **Implementation agent: implement RC-04 analysis proposals; Wixely: provide a representative labelled ad-removal example**. Extend codec/container or image-compositing coverage only with equivalent join, pixel and audio evidence.
+Next owner/action: **Implementation agent: extend speaker/synthesis contracts and begin RC-09 feasibility; Wixely: provide representative labelled examples**. Extend codec/container or image-compositing coverage only with equivalent join, pixel and audio evidence.

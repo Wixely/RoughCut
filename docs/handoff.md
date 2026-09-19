@@ -6,11 +6,11 @@
 
 ## Current state
 
-The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, bounded live acquisition/caption selection, local Whisper transcription, supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed verification passes 37 checks; see [RC-03 live evidence](evidence/2026-09-19-rc03-live.md), [timed-image evidence](evidence/2026-09-19-timed-images.md), [export evidence](evidence/2026-09-19-export.md) and [commands](development.md). There is no GUI, semantic inference, diarization or Qwen runtime yet. No remote or project license is selected.
+The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, bounded live acquisition/caption selection, local Whisper transcription, provider-neutral [evidence-backed analysis](analysis.md), supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed verification passes 40 checks; see [RC-04 evidence](evidence/2026-09-19-rc04-analysis.md), [RC-03 live evidence](evidence/2026-09-19-rc03-live.md), [timed-image evidence](evidence/2026-09-19-timed-images.md) and [export evidence](evidence/2026-09-19-export.md). There is no GUI, standalone semantic provider, diarization or Qwen runtime yet. No remote or project license is selected.
 
 The [implementation brief](product-and-architecture.md) carries forward the complete discovery plan, including requirements, architecture boundaries, illustrative JSON, export semantics, reuse candidates, open questions and risks. The original [PLAN note](../../PLAN/inbox/roughcut.md) is historical discovery context; maintain new implementation decisions here.
 
-## Continue with evidence-backed analysis (RC-04)
+## Continue with speaker correction and Qwen feasibility (RC-01/09)
 
 On 2026-09-19 the user added speaker distinction and voice replacement via Qwen TTS. These are confirmed product requirements, now covered by the implementation brief and RC-09. No diarization backend, Qwen model/runtime or deployment mode has been adopted or tested. Include speaker assignments, corrections, voice mappings and replacement provenance in RC-01; keep the initial deterministic export proof bounded. RC-09 follows the speech/export foundations and joins CLI/MCP/desktop before release validation. Strict copy-only export must reject active voice replacements.
 
@@ -18,11 +18,13 @@ The user also required images retrieved from any valid video timestamp for agent
 
 The core now includes caption provenance/retiming, transactional edit batches and export plan/report contracts. The exporter proves copy-only PNG/PCM Matroska cuts, rejects unsupported strict requests, encodes crop/H.264 input when explicitly permitted, and validates every decoded frame, PCM sample, presentation timestamp and copied packet payload before publishing an atomic bundle. It is deliberately limited to the matrix in the export guide. Do not expand safe-copy claims from this one matrix.
 
-The bounded yt-dlp adapter, caption assessment/override and timed local-STT processor are implemented. Live Windows acceptance used standalone yt-dlp 2026.07.04 with pinned Deno 2.9.7 and downloaded a public 19-second YouTube source plus manual English captions. Whisper.net/runtime 1.9.1 transcribed a synthetic 77.1-second source in three 30-second-or-shorter chunks and persisted timed SRT and model/source provenance. Bantz was left unchanged because its public result discards segment times. Continue with conservative analysis proposals that retain uncertain material; structured evidence, speaker correction history and synthesis provenance remain contract work.
+The bounded RC-04 workflow accepts source-time evidence/observations through `IContentAnalyzer`, CLI or MCP, records provider/model/prompt/source provenance, maps observations to clips and persists revision-bound proposals. `review` never auto-removes; `auto-high-certainty` removes only a high-certainty provider recommendation. Lower certainty remains review-only. Automatic and explicit reviewed application preserve surrounding material and clear stale proposals. The tests use labelled synthetic ad/no-ad/uncertain observations; no standalone model or real-media quality claim is made.
+
+The bounded yt-dlp adapter, caption assessment/override and timed local-STT processor remain verified. Live Windows acceptance used standalone yt-dlp 2026.07.04 with pinned Deno 2.9.7. Whisper.net/runtime 1.9.1 transcribed a 77.1-second synthetic source in three chunks. Bantz remains unchanged because its public result discards segment times.
 
 Extend the synthetic fixtures and executable test harness without personal media or downloads. Keep an explicit allow/reject policy so it will work through MCP without an interactive dialog. Build/run instructions and VS Code configurations now exist; keep them aligned with changes.
 
-VS Code has 20 launch options covering the stdio MCP host, current CLI commands including acquisition/caption assessment/timeline preview, Whisper model preparation/transcription, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
+VS Code has 22 launch options covering the stdio MCP host, current CLI commands including analysis save/automatic apply, acquisition/caption assessment/timeline preview, Whisper model preparation/transcription, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
 
 ## Local environment observations
 
@@ -40,14 +42,14 @@ Sibling Bantz, CupriFace, DNAX, MCPSharp and MCPHub directories were observed. T
 | --- | --- | --- |
 | Remote host, visibility and project license | Wixely | Before remote creation/publication; not a blocker for local implementation |
 | Broader export formats, delivery presets and snapping tolerance | Agent proposes; Wixely resolves product tradeoffs | After RC-02's bounded matrix; current implementation rejects unaligned cuts |
-| Semantic/visual inference mode and provider | Wixely | RC-04; no implicit cloud disclosure |
+| Standalone semantic/visual inference provider beyond MCP-supplied observations | Wixely | Optional RC-04 expansion; no implicit cloud disclosure |
 | Diarization backend, Qwen TTS model/runtime, voice modes and duration/background handling | Agent evaluates; Wixely resolves material tradeoffs | RC-09 feasibility and dependency adoption |
 | Desktop UI and playback backend | Agent, with Wixely on material tradeoffs | RC-06 feasibility gate |
 | Image transport/client support, payload limits and scope beyond timed still-image insertion | Agent validates contracts; Wixely resolves broader compositing scope | RC-10 feasibility |
-| Representative labelled ad-removal example and quality targets | Wixely / Agent | RC-04 acceptance |
+| Representative labelled ad-removal and multi-speaker examples with quality targets | Wixely / Agent | Semantic-quality and RC-09 acceptance |
 
 None of these choices prevents defining contracts and the deterministic local export slice. Proposed defaults in the brief are assumptions, not confirmed user preferences.
 
 ## Remaining work
 
-Remaining: evidence-backed analysis, interactive image-client acceptance, richer speech contracts, speaker/Qwen integration, desktop UI, broader export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: implement RC-04 analysis proposals; Wixely: provide a representative labelled ad-removal example**.
+Remaining: interactive image-client acceptance, speaker correction/synthesis contracts, diarization/Qwen integration, desktop UI, broader semantic/export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: extend RC-01 speaker/synthesis provenance and begin RC-09 feasibility; Wixely: provide representative labelled ad-removal and multi-speaker examples**.
