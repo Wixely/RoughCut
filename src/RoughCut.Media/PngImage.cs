@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 
-namespace RoughCut.Application;
+namespace RoughCut.Media;
 
-internal static class PngValidator
+public static class PngImage
 {
     private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
 

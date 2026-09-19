@@ -155,7 +155,7 @@ internal static class ExportTests
             var report = await exporter.ExportAsync(path, destination, allowEncoding: true);
             Assert(report.Plan.Width == 80 && report.Plan.Height == 48 && report.Validation.VideoContentMatches && report.Validation.AudioContentMatches, "Crop export failed validation.");
         });
-        await check("Unaligned cuts, active voice replacements and image clips are rejected", async () =>
+        await check("Unaligned cuts, active voice replacements and image-only timelines are rejected", async () =>
         {
             var unaligned = project with { Timeline = [new("bad", "source-1", 50, 1000)] };
             Assert(!(await planner.PreflightAsync(unaligned, projectPath)).Supported, "Unaligned cut accepted.");
@@ -175,6 +175,78 @@ internal static class ExportTests
             Assert(!(await planner.PreflightAsync(image, projectPath)).Supported, "Image rendering silently omitted.");
             Assert(!(await planner.PreflightAsync(project with { Timeline = [project.Timeline[0] with { Crop = new(0, 0, 80, 48) }, project.Timeline[1]] }, projectPath)).Supported,
                 "Inconsistent crop dimensions accepted.");
+        });
+        await check("Timed image insertion previews and exports fitted pixels with silence", async () =>
+        {
+            var imagePath = Path.Combine(root, "inserted.png");
+            await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=c=0x2050d0:size=80x96:d=1",
+                "-frames:v", "1", "-c:v", "png", "-pix_fmt", "rgb24", "-threads:v", "1", "-n", imagePath]);
+            var baseProject = project with
+            {
+                ProjectId = "image-timeline",
+                Revision = 1,
+                ExportMode = "prefer-stream-copy",
+                Assets = [.. project.Assets, new("inserted-image", "image", "inserted.png", await MediaReader.FingerprintAsync(imagePath), 0, 80, 96, "image/png")],
+                Provenance = [new("inserted-image", "test-fixture", "synthetic")]
+            };
+            var path = Path.Combine(root, "image-project.json");
+            await store.SaveAsync(path, baseProject, 0);
+            var withImage = TimelineEditor.Apply(baseProject,
+                [new("insert-image", ClipId: "still", AssetId: "inserted-image", Duration: 1000, BeforeClipId: "clip-1", Fit: "contain")]);
+            await store.SaveAsync(path, withImage, 1);
+            Assert(withImage.Timeline.Select(clip => clip.Id).SequenceEqual(new[] { "later", "still", "clip-1" }) &&
+                withImage.Timeline[1].Audio == "silence", "Image insertion order or audio policy is incorrect.");
+            var plan = await planner.PreflightAsync(withImage, path);
+            Assert(plan.Supported && plan.RequiresEncoding && plan.Duration == 3000 &&
+                plan.Streams.All(stream => stream.Action == "encode"), "Timed-image preflight did not select complete lossless rendering.");
+            var strict = await planner.PreflightAsync(withImage with { ExportMode = "copy-only" }, path);
+            Assert(!strict.Supported && strict.Issues.Any(issue => issue.Code == "unsupported-copy-only"), "Strict copy-only accepted an active image.");
+            var previewer = new TimelinePreviewer(ffmpeg, ffprobe);
+            var preview = await previewer.GetFrameAsync(path, 2, 1500);
+            Assert(preview.Info.AssetKind == "image" && preview.Info.ClipId == "still" && preview.Info.Actual.Ticks == 1500 &&
+                preview.Info.Width == 160 && preview.Info.Height == 96, "Timeline preview did not resolve the inserted image revision and canvas.");
+            var coverPath = Path.Combine(root, "cover-project.json");
+            var coverProject = withImage with
+            {
+                ProjectId = "image-cover",
+                Revision = 1,
+                Timeline = [.. withImage.Timeline.Select(clip => clip.Id == "still" ? clip with { Fit = "cover" } : clip)]
+            };
+            await store.SaveAsync(coverPath, coverProject, 0);
+            var coverPreview = await previewer.GetFrameAsync(coverPath, 1, 1500);
+            var containPreviewPath = Path.Combine(root, "contain-preview.png");
+            var coverPreviewPath = Path.Combine(root, "cover-preview.png");
+            await File.WriteAllBytesAsync(containPreviewPath, preview.Png);
+            await File.WriteAllBytesAsync(coverPreviewPath, coverPreview.Png);
+            var containRaw = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", containPreviewPath, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]);
+            var coverRaw = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", coverPreviewPath, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]);
+            Assert(containRaw.Output.AsSpan(0, 3).ToArray().All(value => value == 0) &&
+                coverRaw.Output.AsSpan(0, 3).ToArray().Any(value => value != 0), "Contain padding and cover cropping were not applied distinctly.");
+            await Throws<RevisionConflictException>(() => previewer.GetFrameAsync(path, 1, 1500));
+            var cliOption = Array.IndexOf(args, "--cli");
+            if (cliOption >= 0)
+            {
+                var cli = Path.GetFullPath(args[cliOption + 1]);
+                var cliPreview = Path.Combine(root, "cli-image-preview.png");
+                var cliResult = cli.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                    ? await ToolProcess.RunAsync("dotnet", [cli, "timeline-frame", path, "2", "1.5", cliPreview])
+                    : await ToolProcess.RunAsync(cli, ["timeline-frame", path, "2", "1.5", cliPreview]);
+                var cliInfo = JsonSerializer.Deserialize(cliResult.Output, ProjectJson.Default.TimelineFrameInfo)!;
+                Assert(cliInfo.ClipId == "still" && File.Exists(cliPreview), "CLI timeline preview did not return the inserted image.");
+            }
+            var destination = Path.Combine(root, "image result");
+            await Throws<ExportRejectedException>(() => exporter.ExportAsync(path, destination));
+            var report = await exporter.ExportAsync(path, destination, allowEncoding: true);
+            Assert(report.Validation.DecodedFrames == 30 && report.Validation.AudioSamples == 144000 &&
+                report.Validation.VideoContentMatches && report.Validation.AudioContentMatches &&
+                report.Captions[1].Start.CompareTo(new(2500, new(1, 1000))) == 0,
+                "Timed-image export or shifted captions failed validation.");
+            var rendered = await new MediaReader(ffmpeg, ffprobe).GetFrameAsync(Path.Combine(destination, "video.mkv"),
+                new("output", new(1500, new(1, 1000))));
+            Assert(preview.Png.SequenceEqual(rendered.Png), "Timeline preview pixels differ from the exported inserted image.");
+            await File.AppendAllTextAsync(imagePath, "changed");
+            Assert((await planner.PreflightAsync(withImage, path)).Issues.Any(issue => issue.Code == "image-changed"),
+                "Changed image asset was accepted.");
         });
         await check("H.264 copy is rejected while explicit encoding validates B-frame cuts", async () =>
         {

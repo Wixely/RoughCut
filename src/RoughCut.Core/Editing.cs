@@ -29,7 +29,8 @@ public static class TimeMath
 
 public sealed record EditOperation(string Action, string? ClipId = null, long? In = null,
     long? Out = null, long? At = null, string? NewClipId = null, string[]? Order = null,
-    Crop? Crop = null, string? Mode = null);
+    Crop? Crop = null, string? Mode = null, string? AssetId = null, long? Duration = null,
+    string? BeforeClipId = null, string? Fit = null);
 
 public static class TimelineEditor
 {
@@ -44,7 +45,7 @@ public static class TimelineEditor
         {
             if (operation is null) throw new ArgumentException("Null edit operation.");
             var index = clips.FindIndex(c => c.Id == operation.ClipId);
-            if (operation.Action is not ("reorder" or "export-mode") && index < 0)
+            if (operation.Action is not ("reorder" or "export-mode" or "insert-image") && index < 0)
                 throw new ArgumentException("Edit references an unknown clip.");
             var fields = new HashSet<string>();
             if (operation.ClipId is not null) fields.Add("clipId");
@@ -55,6 +56,10 @@ public static class TimelineEditor
             if (operation.Order is not null) fields.Add("order");
             if (operation.Crop is not null) fields.Add("crop");
             if (operation.Mode is not null) fields.Add("mode");
+            if (operation.AssetId is not null) fields.Add("assetId");
+            if (operation.Duration is not null) fields.Add("duration");
+            if (operation.BeforeClipId is not null) fields.Add("beforeClipId");
+            if (operation.Fit is not null) fields.Add("fit");
             string[] allowed = operation.Action switch
             {
                 "trim" => ["clipId", "in", "out"],
@@ -63,6 +68,7 @@ public static class TimelineEditor
                 "reorder" => ["order"],
                 "crop" => ["clipId", "crop"],
                 "export-mode" => ["mode"],
+                "insert-image" => ["clipId", "assetId", "duration", "beforeClipId", "fit"],
                 _ => throw new ArgumentException("Unknown edit action.")
             };
             if (fields.Except(allowed).Any()) throw new ArgumentException("Edit contains fields unrelated to its action.");
@@ -94,6 +100,18 @@ public static class TimelineEditor
                     clips = order.Select(id => clips.Single(c => c.Id == id)).ToList();
                     break;
                 case "export-mode": mode = operation.Mode ?? throw new ArgumentException("Export mode is required."); break;
+                case "insert-image":
+                    if (string.IsNullOrWhiteSpace(operation.ClipId) || clips.Any(c => c.Id == operation.ClipId) ||
+                        string.IsNullOrWhiteSpace(operation.AssetId) || operation.Duration is not > 0 ||
+                        project.Assets.SingleOrDefault(asset => asset.Id == operation.AssetId) is not { Kind: "image" })
+                        throw new ArgumentException("Image insertion requires a new clip ID, an image asset and a positive hold duration.");
+                    var insertion = operation.BeforeClipId is null
+                        ? clips.Count
+                        : clips.FindIndex(existing => existing.Id == operation.BeforeClipId);
+                    if (insertion < 0) throw new ArgumentException("Image insertion references an unknown before-clip ID.");
+                    clips.Insert(insertion, new(operation.ClipId, operation.AssetId, 0, operation.Duration.Value,
+                        Fit: operation.Fit ?? "contain", Audio: "silence"));
+                    break;
             }
         }
         var result = project with { Revision = checked(project.Revision + 1), Timeline = clips.ToArray(), ExportMode = mode };

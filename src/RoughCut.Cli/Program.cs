@@ -25,6 +25,7 @@ try
                   inspect <local-video>
                   create <local-video> <new-project.json>
                   frame <local-video> <seconds> <new-output.png>
+                  timeline-frame <project.json> <revision> <seconds> <new-output.png>
                   edit <project.json> <operations.json> <expected-revision>
                   captions <project.json> <asset-id> <source.srt> <expected-revision>
                   preflight <project.json>
@@ -123,6 +124,29 @@ try
                 }
                 finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
                 Console.WriteLine(JsonSerializer.Serialize(frame.Info, ProjectJson.Default.FrameInfo));
+                break;
+            }
+        case ["timeline-frame", var path, var expected, var secondsText, var destination]:
+            {
+                var seconds = decimal.Parse(secondsText, NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                if (seconds < 0 || seconds * 1_000_000 != decimal.Truncate(seconds * 1_000_000))
+                    throw new ArgumentException("Seconds must be nonnegative with at most six fractional digits.");
+                var project = await store.LoadAsync(path, token);
+                var timelineTicks = TimeMath.ExactTicks(new(checked((long)(seconds * 1_000_000)), TimeBase.Microseconds), project.TimeBase);
+                destination = Path.GetFullPath(destination);
+                if (File.Exists(destination)) throw new IOException("Output already exists; choose a new output path.");
+                var frame = await new TimelinePreviewer(ffmpeg, ffprobe).GetFrameAsync(path,
+                    long.Parse(expected, CultureInfo.InvariantCulture), timelineTicks, cancellationToken: token);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                var temporaryPath = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    await File.WriteAllBytesAsync(temporaryPath, frame.Png, token);
+                    token.ThrowIfCancellationRequested();
+                    File.Move(temporaryPath, destination, overwrite: false);
+                }
+                finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+                Console.WriteLine(JsonSerializer.Serialize(frame.Info, ProjectJson.Default.TimelineFrameInfo));
                 break;
             }
         default: Console.Error.WriteLine("Unknown command or arguments. Run roughcut help."); return 2;

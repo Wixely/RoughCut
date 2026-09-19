@@ -51,6 +51,22 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: preview timeline frame",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "timeline-frame",
+        "${input:projectPath}",
+        "${input:expectedRevision}",
+        "${input:timestamp}",
+        "${input:timelineFrameOutput}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: create project",
       "type": "coreclr",
       "request": "launch",
@@ -232,6 +248,12 @@
       "type": "promptString",
       "description": "New PNG output path (must not already exist)",
       "default": "artifacts/demo/frame.png"
+    },
+    {
+      "id": "timelineFrameOutput",
+      "type": "promptString",
+      "description": "New rendered timeline PNG path (must not already exist)",
+      "default": "artifacts/demo/timeline-frame.png"
     },
     {
       "id": "newProjectPath",

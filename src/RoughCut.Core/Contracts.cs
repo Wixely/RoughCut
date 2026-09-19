@@ -62,6 +62,10 @@ public sealed record FrameInfo(
     string AssetId, string SourceSha256, MediaTime Requested,
     MediaTime Actual, MediaTime Duration, long StreamStartTicks, int FrameIndex,
     int Width, int Height, string MediaType, string ColourConversion);
+public sealed record TimelineFrameInfo(
+    string ProjectId, long Revision, string ClipId, string AssetId, string AssetKind,
+    MediaTime Requested, MediaTime Actual, MediaTime Duration, MediaTime? SourceActual,
+    int Width, int Height, string MediaType, string Fit, Crop? Crop);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     WriteIndented = true, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -70,6 +74,7 @@ public sealed record FrameInfo(
 [JsonSerializable(typeof(ValidationIssue[]))]
 [JsonSerializable(typeof(TimelineMapping[]))]
 [JsonSerializable(typeof(FrameInfo))]
+[JsonSerializable(typeof(TimelineFrameInfo))]
 [JsonSerializable(typeof(EditOperation[]))]
 [JsonSerializable(typeof(ExportPlan))]
 [JsonSerializable(typeof(ExportReport))]

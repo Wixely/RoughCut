@@ -7,7 +7,7 @@ public sealed record ResolvedClip(string ClipId, string AssetId, long RequestedI
 public sealed record ExportPlan(string ProjectId, long Revision, string ProjectSha256, string Mode,
     TimeBase TimeBase, bool Supported, bool RequiresEncoding, ValidationIssue[] Issues,
     StreamDecision[] Streams, ResolvedClip[] Clips, int Width, int Height, long Duration,
-    string Policy = "matroska-png-pcm-v1");
+    string Policy = "matroska-lossless-timeline-v2");
 public sealed record ExportValidation(int DecodedFrames, long AudioSamples, int Joins,
     bool VideoContentMatches, bool AudioContentMatches, bool PacketPayloadsMatch,
     long MaximumAudioTimestampErrorMicroseconds);

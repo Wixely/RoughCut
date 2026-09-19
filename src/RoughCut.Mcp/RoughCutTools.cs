@@ -47,6 +47,26 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         catch (Exception exception) { return Error(exception); }
     }
 
+    [McpServerTool(Name = "roughcut_get_timeline_frame", ReadOnly = true)]
+    [Description("Return the rendered PNG at a timeline timestamp for an exact project revision, including cuts, order, crop and fitted images.")]
+    public async Task<CallToolResult> GetTimelineFrameAsync(string projectPath, long expectedRevision, long timelineTicks,
+        int maxWidth, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var frame = await operations.GetTimelineFrameAsync(projectPath, expectedRevision, timelineTicks, maxWidth, cancellationToken);
+            return new CallToolResult
+            {
+                Content =
+                [
+                    new TextContentBlock { Text = JsonSerializer.Serialize(frame.Info, ProjectJson.Default.TimelineFrameInfo) },
+                    ImageContentBlock.FromBytes(frame.Png, "image/png")
+                ]
+            };
+        }
+        catch (Exception exception) { return Error(exception); }
+    }
+
     [McpServerTool(Name = "roughcut_apply_edits")]
     [Description("Apply one atomic edit batch when expectedRevision matches; stale writers receive a revision conflict.")]
     public Task<CallToolResult> ApplyEditsAsync(string projectPath, long expectedRevision, EditOperation[] edits,

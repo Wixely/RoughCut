@@ -92,7 +92,7 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         try { png = Convert.FromBase64String(base64Data); }
         catch (FormatException) { throw new InvalidDataException("Image data is not valid base64."); }
         if (png.Length > maxBytes) throw new InvalidDataException("Image exceeds the 8 MiB PNG limit.");
-        var dimensions = PngValidator.ReadDimensions(png);
+        var dimensions = PngImage.ReadDimensions(png);
         var path = workspace.Resolve(projectPath);
         var project = await _store.LoadAsync(path, token);
         if (project.Revision != expectedRevision) throw new RevisionConflictException();
@@ -146,4 +146,9 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         var path = workspace.Resolve(projectPath);
         return await new ExportPlanner(ffmpeg, ffprobe).PreflightAsync(await _store.LoadAsync(path, token), path, token);
     }
+
+    public Task<TimelineFrame> GetTimelineFrameAsync(string projectPath, long expectedRevision, long timelineTicks,
+        int maxWidth, CancellationToken token = default)
+        => new TimelinePreviewer(ffmpeg, ffprobe).GetFrameAsync(workspace.Resolve(projectPath), expectedRevision,
+            timelineTicks, maxWidth, token);
 }

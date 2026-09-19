@@ -27,7 +27,7 @@ internal static class McpTests
             var tools = await client.ListToolsAsync();
             var names = tools.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
-                "roughcut_get_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_import_image", "roughcut_preflight_export",
+                "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_import_image", "roughcut_preflight_export",
                 "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
         });
@@ -82,6 +82,33 @@ internal static class McpTests
                 ["expectedRevision"] = 3L
             });
             Assert(invalid.IsError == true, "Malformed incoming image was accepted.");
+            var inserted = await client.CallToolAsync("roughcut_apply_edits", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["expectedRevision"] = 3L,
+                ["edits"] = JsonDocument.Parse("""[{"action":"insert-image","clipId":"generated-hold","assetId":"generated-still","duration":1000,"beforeClipId":"clip-1","fit":"contain"},{"action":"export-mode","mode":"prefer-stream-copy"}]""").RootElement.Clone()
+            });
+            Assert(inserted.IsError != true, "MCP timed-image insertion failed.");
+            var timeline = await client.CallToolAsync("roughcut_get_timeline_frame", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["expectedRevision"] = 4L,
+                ["timelineTicks"] = 1500L,
+                ["maxWidth"] = 1280
+            });
+            Assert(timeline.IsError != true && timeline.Content.OfType<ImageContentBlock>().Single().DecodedData.Span.SequenceEqual(image.DecodedData.Span),
+                "MCP timeline preview did not return the inserted image pixels.");
+            using var timelineMetadata = JsonDocument.Parse(timeline.Content.OfType<TextContentBlock>().Single().Text);
+            Assert(timelineMetadata.RootElement.GetProperty("revision").GetInt64() == 4 &&
+                timelineMetadata.RootElement.GetProperty("clipId").GetString() == "generated-hold", "MCP timeline preview metadata is not revision-aware.");
+            var staleTimeline = await client.CallToolAsync("roughcut_get_timeline_frame", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["expectedRevision"] = 3L,
+                ["timelineTicks"] = 1500L,
+                ["maxWidth"] = 1280
+            });
+            Assert(staleTimeline.IsError == true, "MCP timeline preview accepted a stale revision.");
         });
 
         await check("MCP enforces workspace paths and project revisions", async () =>
@@ -99,14 +126,28 @@ internal static class McpTests
                 "Stale MCP edit was not reported as a revision conflict.");
         });
 
-        await check("MCP export jobs persist checkpoints and cancel without publishing", async () =>
+        await check("MCP image export jobs complete, persist and cancel safely", async () =>
         {
             await using var client = await CreateClientAsync(command, arguments);
+            var completed = ReadJob(await client.CallToolAsync("roughcut_start_export", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["outputDirectory"] = "mcp-image-export",
+                ["allowEncoding"] = true
+            }));
+            for (var attempt = 0; attempt < 400; attempt++)
+            {
+                await Task.Delay(25);
+                completed = ReadJob(await client.CallToolAsync("roughcut_get_job", new Dictionary<string, object?> { ["jobId"] = completed.JobId }));
+                if (completed.Status is "cancelled" or "failed" or "succeeded") break;
+            }
+            Assert(completed.Status == "succeeded" && File.Exists(Path.Combine(root, "mcp-image-export", "video.mkv")),
+                $"MCP timed-image export did not publish a validated bundle: {completed.Status}: {completed.Message}");
             var started = await client.CallToolAsync("roughcut_start_export", new Dictionary<string, object?>
             {
                 ["projectPath"] = "export-project.json",
                 ["outputDirectory"] = "mcp-cancelled-export",
-                ["allowEncoding"] = false
+                ["allowEncoding"] = true
             });
             var job = ReadJob(started);
             Assert(job.Status is "queued" or "running", "Export job did not start.");
