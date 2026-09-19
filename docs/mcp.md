@@ -14,6 +14,8 @@ dotnet run --project src/RoughCut.Mcp -- --workspace artifacts/mcp-workspace
 
 `ROUGHCUT_WORKSPACE` can supply the root. `ROUGHCUT_FFMPEG` and `ROUGHCUT_FFPROBE` override the external media executables. Standard output is reserved for MCP messages.
 
+Set `ROUGHCUT_QWEN_ENDPOINT` to an absolute loopback service root to enable live synthesis, for example `http://127.0.0.1:8080/`. `ROUGHCUT_QWEN_API_KEY` is optional and `ROUGHCUT_QWEN_TIMEOUT_SECONDS` defaults to 600. Non-loopback endpoints are rejected so enabling this tool cannot silently disclose text to a remote service.
+
 Set `ROUGHCUT_STT_MODEL` to the verified base.en model path to enable local transcription. `ROUGHCUT_STT_LANGUAGE` defaults to `en`; `ROUGHCUT_STT_CHUNK_SECONDS` defaults to 30 and must be 5–30. Inference stays local, while the explicit speech CLI `model` command can download and verify the model beforehand.
 
 The current tools are:
@@ -34,6 +36,7 @@ The current tools are:
 | `roughcut_edit_speakers` | Add, rename, assign or merge speaker labels with persisted correction history |
 | `roughcut_plan_voice_replacement` | Record a Qwen voice mapping and bounded replacement request |
 | `roughcut_import_voice_preview` | Import bounded PCM WAVE with synthesis provenance |
+| `roughcut_synthesize_voice` | Validate the configured loopback Qwen service and generate a revision-safe bounded preview |
 | `roughcut_get_voice_preview` | Return metadata and an actual `audio/wav` MCP content block |
 | `roughcut_set_voice_replacement_state` | Apply or revert an exact-duration preview |
 | `roughcut_import_image` | Validate an incoming base64 PNG and add a content-addressed image asset with provenance |
@@ -47,6 +50,6 @@ Incoming PNGs are capped at 8 MiB and 8K pixels, require valid chunk checksums, 
 
 Jobs are serialized atomically under `<workspace>/.roughcut/jobs`, retain at most 100 records and run exports one at a time. An interrupted `queued` or `running` checkpoint becomes `failed` when the next host starts; automatic resume is not claimed. Export staging cleanup and atomic bundle publication remain the export engine's responsibility.
 
-The executable protocol checks launch the host with the official MCP client, list all 22 tools, receive and decode source/timeline PNG and voice-preview WAVE content blocks, exercise reversible speaker/voice changes, assess captions, persist evidence-backed analysis, prove uncertain removals remain review-only, reject workspace escapes and stale revisions, verify actionable missing-model behavior for local STT, import/insert a PNG, complete an encoded image export, and cancel a separate durable export without publishing output. Live provider acceptance is recorded separately. The stdio host is a normal .NET deployment because both its reflection-based MCP schema and native Whisper loading have not been qualified for NativeAOT.
+The executable protocol checks launch the host with the official MCP client, list all 23 tools, synthesize through a loopback HTTP fixture, receive and decode source/timeline PNG and voice-preview WAVE content blocks, exercise reversible speaker/voice changes, assess captions, persist evidence-backed analysis, prove uncertain removals remain review-only, reject workspace escapes and stale revisions, verify actionable missing-model behavior for local STT, import/insert a PNG, complete an encoded image export, and cancel a separate durable export without publishing output. Live WSL/CUDA provider acceptance is recorded separately. The stdio host is a normal .NET deployment because both its reflection-based MCP schema and native Whisper loading have not been qualified for NativeAOT.
 
 Analysis submissions are untrusted data. MCP callers supply provider/model identity, bounded source-time evidence and observations; RoughCut validates and maps them through the policy described in the [analysis guide](analysis.md). No MCP tool executes provider-generated commands or silently discloses media to another service.

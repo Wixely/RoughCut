@@ -81,4 +81,4 @@ Before publication, the exporter checks every output presentation timestamp and 
 
 Run `.\scripts\verify.ps1 -PublishAot` for the synthetic regression suite. The export fixture has visible binary frame IDs, a changing-frequency audio signal and supplied captions. The independent frame-ID check verifies the reorder around the join; production validation additionally checks every pixel hash, selected PCM sample and copied packet payload.
 
-Next owner/action: **Implementation agent: add a cancellable local Qwen provider after runtime approval, then evaluate diarization; Wixely: provide representative labelled examples**. Extend codec/container, replacement rendering or image-compositing coverage only with equivalent join, pixel and audio evidence.
+Next owner/action: **Implementation agent: add duration fitting and replacement rendering, then evaluate diarization; Wixely: provide representative labelled examples**. Extend codec/container, replacement rendering or image-compositing coverage only with equivalent join, pixel and audio evidence.
