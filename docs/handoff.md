@@ -6,13 +6,13 @@
 
 ## Current state
 
-The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, bounded live acquisition/caption selection, local Whisper transcription, provider-neutral [evidence-backed analysis](analysis.md), supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed verification passes 40 checks; see [RC-04 evidence](evidence/2026-09-19-rc04-analysis.md), [RC-03 live evidence](evidence/2026-09-19-rc03-live.md), [timed-image evidence](evidence/2026-09-19-timed-images.md) and [export evidence](evidence/2026-09-19-export.md). There is no GUI, standalone semantic provider, diarization or Qwen runtime yet. No remote or project license is selected.
+The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, bounded live acquisition/caption selection, local Whisper transcription, provider-neutral [evidence-backed analysis](analysis.md), revisioned [speaker corrections and reversible voice previews](speaker-and-voice.md), supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed and NativeAOT-CLI verification each pass 42 checks; see the [speaker/voice evidence](evidence/2026-09-19-speaker-voice-foundation.md). There is no GUI, standalone semantic provider, diarization, direct Qwen runtime or voice rendering yet. No remote or project license is selected.
 
 The [implementation brief](product-and-architecture.md) carries forward the complete discovery plan, including requirements, architecture boundaries, illustrative JSON, export semantics, reuse candidates, open questions and risks. The original [PLAN note](../../PLAN/inbox/roughcut.md) is historical discovery context; maintain new implementation decisions here.
 
-## Continue with speaker correction and Qwen feasibility (RC-01/09)
+## Continue with live Qwen and diarization feasibility (RC-09)
 
-On 2026-09-19 the user added speaker distinction and voice replacement via Qwen TTS. These are confirmed product requirements, now covered by the implementation brief and RC-09. No diarization backend, Qwen model/runtime or deployment mode has been adopted or tested. Include speaker assignments, corrections, voice mappings and replacement provenance in RC-01; keep the initial deterministic export proof bounded. RC-09 follows the speech/export foundations and joins CLI/MCP/desktop before release validation. Strict copy-only export must reject active voice replacements.
+On 2026-09-19 the user added speaker distinction and voice replacement via Qwen TTS. The bounded RC-01 foundation now persists speaker add/rename/assign/merge history and complete Qwen preview provenance; CLI/MCP can import, return, apply and revert exact PCM WAVE previews. No diarization backend, Qwen model/runtime or deployment mode has been adopted or tested. RC-09 must add live providers, cancellation and eventual rendering without weakening the overlap/background/duration rejections. Strict copy-only export rejects applied voice replacements.
 
 The user also required images retrieved from any valid video timestamp for agents to inspect through MCP, and incoming images through MCP for agent-generated content. The official MCP client now receives/decodes actual PNG content blocks with precise timing, imports bounded checksummed PNG assets with provenance, inserts them transactionally, previews the exact saved revision and completes validated encoded export. Interactive AI-agent visual interpretation has not been tested.
 
@@ -24,7 +24,7 @@ The bounded yt-dlp adapter, caption assessment/override and timed local-STT proc
 
 Extend the synthetic fixtures and executable test harness without personal media or downloads. Keep an explicit allow/reject policy so it will work through MCP without an interactive dialog. Build/run instructions and VS Code configurations now exist; keep them aligned with changes.
 
-VS Code has 22 launch options covering the stdio MCP host, current CLI commands including analysis save/automatic apply, acquisition/caption assessment/timeline preview, Whisper model preparation/transcription, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
+VS Code has 27 launch options covering the stdio MCP host, current CLI commands including analysis save/automatic apply, speaker and voice preview operations, acquisition/caption assessment/timeline preview, Whisper model preparation/transcription, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
 
 ## Local environment observations
 
@@ -52,4 +52,4 @@ None of these choices prevents defining contracts and the deterministic local ex
 
 ## Remaining work
 
-Remaining: interactive image-client acceptance, speaker correction/synthesis contracts, diarization/Qwen integration, desktop UI, broader semantic/export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: extend RC-01 speaker/synthesis provenance and begin RC-09 feasibility; Wixely: provide representative labelled ad-removal and multi-speaker examples**.
+Remaining: interactive image-client acceptance, live diarization/Qwen integration and voice rendering, desktop UI, broader semantic/export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: add a cancellable local Qwen provider after runtime approval and evaluate diarization; Wixely: provide representative multi-speaker and replacement examples**.

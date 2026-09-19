@@ -6,7 +6,7 @@
 - Owner: Implementation agent
 - State: Windows foundation, bounded export and stdio MCP/job checks executed; full application acceptance pending
 
-See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md), [timed-image evidence](evidence/2026-09-19-timed-images.md), [RC-03 live evidence](evidence/2026-09-19-rc03-live.md) and [RC-04 evidence](evidence/2026-09-19-rc04-analysis.md): managed verification passes 40 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. The analysis slice validates conservative policy and exact application on labelled synthetic observations; representative semantic quality, broader media/languages, Linux and interactive image-client gates remain pending.
+See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md), [timed-image evidence](evidence/2026-09-19-timed-images.md), [RC-03 live evidence](evidence/2026-09-19-rc03-live.md), [RC-04 evidence](evidence/2026-09-19-rc04-analysis.md) and [speaker/voice evidence](evidence/2026-09-19-speaker-voice-foundation.md): managed verification passes 42 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. Speaker/voice tests cover correction history, provenance, PCM WAVE round-trip, apply/revert, CLI parity and decoded MCP audio. Representative semantic/voice quality, live Qwen/diarization, broader media/languages, Linux and interactive image-client gates remain pending.
 
 ## First executable slice
 

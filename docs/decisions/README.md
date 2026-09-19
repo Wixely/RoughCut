@@ -10,5 +10,6 @@
 | [0006](0006-acquisition-caption-speech-boundary.md) | 2026-09-19 | Deterministic foundation accepted | Bounded yt-dlp staging, caption evidence/override and provider-neutral timed local-STT chunks |
 | [0007](0007-live-acquisition-and-whisper.md) | 2026-09-19 | Accepted for bounded Windows MVP | Explicit Deno acquisition and pinned timed Whisper.net base.en provider |
 | [0008](0008-evidence-backed-analysis.md) | 2026-09-19 | Accepted for bounded MCP/CLI MVP | Persist evidence before conservative revision-bound editorial proposals |
+| [0009](0009-reversible-speaker-and-voice-boundary.md) | 2026-09-19 | Accepted for bounded CLI/MCP foundation | Revisioned speaker corrections and provenance-rich reversible Qwen preview import |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.
