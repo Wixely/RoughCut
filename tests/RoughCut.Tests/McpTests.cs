@@ -29,7 +29,7 @@ internal static class McpTests
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
                 "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
                 "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
-                "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
+                "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
         });
 
@@ -125,6 +125,14 @@ internal static class McpTests
             });
             Assert(stale.IsError == true && stale.Content.OfType<TextContentBlock>().Single().Text.Contains("revision conflict", StringComparison.OrdinalIgnoreCase),
                 "Stale MCP edit was not reported as a revision conflict.");
+            var unconfiguredSpeech = await client.CallToolAsync("roughcut_transcribe_local", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["assetId"] = "source-1",
+                ["expectedRevision"] = 4L
+            });
+            Assert(unconfiguredSpeech.IsError == true && unconfiguredSpeech.Content.OfType<TextContentBlock>().Single().Text.Contains("ROUGHCUT_STT_MODEL", StringComparison.Ordinal),
+                "Unconfigured local STT did not return an actionable error.");
         });
 
         await check("MCP caption assessment recommends and records a source", async () =>

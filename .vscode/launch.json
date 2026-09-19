@@ -207,7 +207,39 @@
       "args": [
         "acquire",
         "${input:sourceUrl}",
-        "${input:acquisitionDirectory}"
+        "${input:acquisitionDirectory}",
+        "${input:denoPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: prepare Whisper model",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Speech.Cli/bin/Debug/net10.0/roughcut-speech.dll",
+      "args": [
+        "model",
+        "${input:whisperModelPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: transcribe locally",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Speech.Cli/bin/Debug/net10.0/roughcut-speech.dll",
+      "args": [
+        "transcribe",
+        "${input:projectPath}",
+        "${input:assetId}",
+        "${input:expectedRevision}",
+        "${input:whisperModelPath}",
+        "${input:transcriptionLanguage}",
+        "${input:transcriptionChunkSeconds}"
       ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal"
@@ -351,6 +383,30 @@
       "type": "promptString",
       "description": "New acquisition directory",
       "default": "artifacts/acquired/video"
+    },
+    {
+      "id": "denoPath",
+      "type": "promptString",
+      "description": "Deno executable used by yt-dlp for extractor JavaScript",
+      "default": "artifacts/tools/deno-v2.9.7/deno.exe"
+    },
+    {
+      "id": "whisperModelPath",
+      "type": "promptString",
+      "description": "Pinned Whisper base.en model path",
+      "default": "artifacts/models/ggml-base.en.bin"
+    },
+    {
+      "id": "transcriptionLanguage",
+      "type": "promptString",
+      "description": "Whisper language code",
+      "default": "en"
+    },
+    {
+      "id": "transcriptionChunkSeconds",
+      "type": "promptString",
+      "description": "Bounded transcription chunk size (5-30 seconds)",
+      "default": "30"
     },
     {
       "id": "exportDirectory",

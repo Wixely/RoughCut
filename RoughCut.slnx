@@ -5,6 +5,8 @@
     <Project Path="src/RoughCut.Application/RoughCut.Application.csproj" />
     <Project Path="src/RoughCut.Cli/RoughCut.Cli.csproj" />
     <Project Path="src/RoughCut.Mcp/RoughCut.Mcp.csproj" />
+    <Project Path="src/RoughCut.Speech.Whisper/RoughCut.Speech.Whisper.csproj" />
+    <Project Path="src/RoughCut.Speech.Cli/RoughCut.Speech.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RoughCut.Tests/RoughCut.Tests.csproj" />

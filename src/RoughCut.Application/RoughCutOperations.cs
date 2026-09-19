@@ -116,6 +116,63 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
             assessed.Select(item => item.Assessment).ToArray(), edited);
     }
 
+    public async Task<EditProject> TranscribeLocalAsync(string projectPath, string assetId, long expectedRevision,
+        ILocalSpeechTranscriber transcriber, int chunkSeconds = LocalSpeechProcessor.DefaultChunkSeconds,
+        CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var report = await new LocalSpeechProcessor(ffmpeg).TranscribeAsync(project, path, assetId, transcriber, chunkSeconds, token);
+        if (report.Segments.Length == 0) throw new InvalidDataException("Local transcription returned no timed speech.");
+        var output = report.Segments.Select(segment => new OutputCaption(segment.Id, assetId,
+            new(segment.Start, project.TimeBase), new(segment.End, project.TimeBase), segment.Text)).ToArray();
+        var srt = Captions.WriteSrt(output);
+        var bytes = new UTF8Encoding(false).GetBytes(srt);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var relative = $"assets/captions/{hash}.srt";
+        var destination = ProjectFiles.Resolve(path, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var created = false;
+        if (!File.Exists(destination))
+        {
+            var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await File.WriteAllBytesAsync(temporary, bytes, token);
+                token.ThrowIfCancellationRequested();
+                File.Move(temporary, destination, overwrite: false);
+                created = true;
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+        else if (!string.Equals(await MediaReader.FingerprintAsync(destination, token), hash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Existing transcription caption asset does not match its content hash.");
+        var cues = Captions.ParseSrt(srt);
+        var asset = project.Assets.Single(item => item.Id == assetId);
+        var covered = cues.Sum(cue => cue.End - cue.Start);
+        var durationMs = TimeMath.ExactTicks(new(asset.Duration, project.TimeBase), new(1, 1000));
+        var coverage = durationMs == 0 ? 0 : checked((int)Math.Min(10_000, covered * 10_000 / durationMs));
+        var edited = project with
+        {
+            Revision = checked(expectedRevision + 1),
+            Speech = [.. project.Speech.Where(segment => segment.AssetId != assetId), .. report.Segments],
+            Transcription = new(assetId, asset.Sha256, report.Provider, report.Model, report.Language, chunkSeconds),
+            Captions = new(assetId, relative, hash, new(1, 1000), cues, "local-stt", report.Language,
+                "recommended", $"{report.Provider}:{report.Model}", coverage)
+        };
+        try { await _store.SaveAsync(path, edited, expectedRevision, token); }
+        catch
+        {
+            var referenced = false;
+            try { referenced = string.Equals((await _store.LoadAsync(path, CancellationToken.None)).Captions?.SourceSha256, hash, StringComparison.OrdinalIgnoreCase); }
+            catch (Exception) { referenced = true; }
+            if (created && !referenced && File.Exists(destination)) File.Delete(destination);
+            throw;
+        }
+        return edited;
+    }
+
     public async Task<EditProject> ImportPngAsync(string projectPath, string assetId, string base64Data,
         long expectedRevision, string provider, string modelVersion, CancellationToken token = default)
     {

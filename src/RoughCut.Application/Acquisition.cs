@@ -62,12 +62,11 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
     {
         var arguments = new List<string>
         {
-            "--ignore-config", "--no-js-runtimes", "--no-remote-components", "--no-playlist", "--max-downloads", "1", "--max-filesize", "536870912",
+            "--ignore-config", "--no-js-runtimes", "--no-remote-components", "--no-playlist", "--max-filesize", "536870912",
             "--no-overwrites", "--no-progress", "--newline", "--write-info-json", "--write-subs", "--write-auto-subs",
-            "--sub-langs", "all,-live_chat", "--sub-format", "srt/best", "--convert-subs", "srt",
+            "--sub-langs", "en,-live_chat", "--sub-format", "srt/best", "--convert-subs", "srt",
             "--merge-output-format", "mkv", "--remux-video", "mkv", "--paths", staging,
-            "--output", "source.%(ext)s", "--output", "infojson:source.info.json",
-            "--output", "subtitle:caption.%(language)s.%(ext)s"
+            "--output", "source.%(ext)s"
         };
         if (denoPath is not null) arguments.AddRange(["--js-runtimes", "deno:" + denoPath]);
         arguments.Add("--");
@@ -92,16 +91,16 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
         var manualLanguages = Languages(root, "subtitles");
         var automaticLanguages = Languages(root, "automatic_captions");
         var media = files.SingleOrDefault(file => Path.GetFileName(file).StartsWith("source.", StringComparison.Ordinal) &&
-            !file.EndsWith(".info.json", StringComparison.OrdinalIgnoreCase))
+            !file.EndsWith(".json", StringComparison.OrdinalIgnoreCase) && !file.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidDataException("Acquisition did not produce exactly one media file.");
         var captions = new List<AcquiredCaption>();
-        foreach (var caption in files.Where(file => Path.GetFileName(file).StartsWith("caption.", StringComparison.Ordinal) &&
+        foreach (var caption in files.Where(file => Path.GetFileName(file).StartsWith("source.", StringComparison.Ordinal) &&
             file.EndsWith(".srt", StringComparison.OrdinalIgnoreCase)).OrderBy(file => file, StringComparer.Ordinal))
         {
             var bytes = await ProjectFiles.ReadBoundedAsync(caption, Captions.MaxBytes, cancellationToken);
             var cues = Captions.ParseSrt(new System.Text.UTF8Encoding(false, true).GetString(bytes));
             var name = Path.GetFileNameWithoutExtension(caption);
-            var language = name["caption.".Length..];
+            var language = name["source.".Length..];
             var sourceKind = manualLanguages.Contains(language) ? "manual" :
                 automaticLanguages.Contains(language) ? "automatic" : "supplied";
             captions.Add(new(Path.GetFileName(caption), language, sourceKind, Convert.ToHexStringLower(SHA256.HashData(bytes)), cues.Length));

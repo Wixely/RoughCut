@@ -46,13 +46,16 @@ public sealed class LocalSpeechProcessor(string ffmpeg = "ffmpeg")
             var chunkDuration = Math.Min(chunkSeconds * 1000L, durationMs - chunkStart);
             var expectedBytes = checked((int)(chunkDuration * SampleRate * sizeof(short) / 1000));
             var result = await ToolProcess.RunAsync(ffmpeg,
-                ["-v", "error", "-nostdin", "-xerror", "-ss", Seconds(chunkStart), "-t", Seconds(chunkDuration),
-                 "-protocol_whitelist", "file", "-i", source, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", SampleRate.ToString(CultureInfo.InvariantCulture),
-                 "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"],
+                ["-v", "error", "-nostdin", "-xerror", "-ss", Seconds(chunkStart),
+                 "-protocol_whitelist", "file", "-i", source, "-t", Seconds(chunkDuration), "-map", "0:a:0", "-vn", "-ac", "1", "-ar", SampleRate.ToString(CultureInfo.InvariantCulture),
+                 "-af", "apad", "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"],
                 outputLimit: expectedBytes + 4096, timeout: TimeSpan.FromMinutes(2), cancellationToken: cancellationToken);
-            if (result.Output.Length != expectedBytes || result.Output.Length % sizeof(short) != 0)
-                throw new InvalidDataException("Decoded speech chunk has an invalid PCM length.");
-            var transcript = await transcriber.TranscribePcm16kMonoAsync(result.Output, cancellationToken);
+            if (result.Output.Length % sizeof(short) != 0 || result.Output.Length > expectedBytes ||
+                expectedBytes - result.Output.Length > SampleRate * sizeof(short) / 1000)
+                throw new InvalidDataException($"Decoded speech chunk has {result.Output.Length} bytes; expected {expectedBytes}.");
+            var pcm = result.Output;
+            if (pcm.Length != expectedBytes) Array.Resize(ref pcm, expectedBytes);
+            var transcript = await transcriber.TranscribePcm16kMonoAsync(pcm, cancellationToken);
             if (string.IsNullOrWhiteSpace(transcript.Provider) || string.IsNullOrWhiteSpace(transcript.Model) ||
                 string.IsNullOrWhiteSpace(transcript.Language)) throw new InvalidDataException("Speech provider provenance is incomplete.");
             provider ??= transcript.Provider;
@@ -64,7 +67,7 @@ public sealed class LocalSpeechProcessor(string ffmpeg = "ffmpeg")
             {
                 if (item.StartMilliseconds < 0 || item.EndMilliseconds <= item.StartMilliseconds ||
                     item.EndMilliseconds > chunkDuration || string.IsNullOrWhiteSpace(item.Text) || item.Text.Length > 8000)
-                    throw new InvalidDataException("Speech engine returned an invalid timed segment.");
+                    throw new InvalidDataException($"Speech engine returned an invalid timed segment ({item.StartMilliseconds}-{item.EndMilliseconds} ms in a {chunkDuration} ms chunk).");
                 var start = TimeMath.ExactTicks(new(checked(chunkStart + item.StartMilliseconds), new(1, 1000)), project.TimeBase);
                 var end = TimeMath.ExactTicks(new(checked(chunkStart + item.EndMilliseconds), new(1, 1000)), project.TimeBase);
                 segments.Add(new($"stt-{segments.Count + 1}", assetId, start, end, item.Text.Trim(), [], "unknown"));

@@ -79,6 +79,16 @@ public static class ProjectValidator
             Check(segment.Assignment is "unknown" or "inferred" or "corrected", segment.Id, "Unknown speaker assignment state.");
             Check(segment.SpeakerIds.Length <= 1 || segment.Overlap, segment.Id, "Multiple speakers require an overlap annotation.");
         }
+        if (project.Transcription is { } transcription)
+        {
+            Check(assets.TryGetValue(transcription.AssetId, out var sourceAsset) && sourceAsset.Kind is "video" or "audio",
+                "transcription.assetId", "Transcription provenance must reference timed media.");
+            Check(sourceAsset is not null && string.Equals(sourceAsset.Sha256, transcription.SourceSha256, StringComparison.OrdinalIgnoreCase),
+                "transcription.sourceSha256", "Transcription source fingerprint must match its asset.");
+            Check(!string.IsNullOrWhiteSpace(transcription.Provider) && !string.IsNullOrWhiteSpace(transcription.Model) &&
+                !string.IsNullOrWhiteSpace(transcription.Language), "transcription", "Transcription provider, model and language are required.");
+            Check(transcription.ChunkSeconds is >= 5 and <= 30, "transcription.chunkSeconds", "Transcription chunk size must be between 5 and 30 seconds.");
+        }
         ids.Clear();
         foreach (var voice in project.Voices)
         {

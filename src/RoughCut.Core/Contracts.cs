@@ -32,6 +32,8 @@ public sealed record Speaker(string Id, string Label);
 public sealed record SpeechSegment(
     string Id, string AssetId, long Start, long End, string Text, string[] SpeakerIds,
     string Assignment = "unknown", bool Overlap = false);
+public sealed record TranscriptionProvenance(string AssetId, string SourceSha256, string Provider,
+    string Model, string Language, int ChunkSeconds);
 public sealed record VoiceMapping(string Id, string SpeakerId, string Provider, string Voice);
 public sealed record VoiceReplacement(
     string Id, string SegmentId, string MappingId, string Text, string? GeneratedAssetId = null);
@@ -50,6 +52,7 @@ public sealed record EditProject
     public TimelineClip[] Timeline { get; init; } = [];
     public Speaker[] Speakers { get; init; } = [];
     public SpeechSegment[] Speech { get; init; } = [];
+    public TranscriptionProvenance? Transcription { get; init; }
     public VoiceMapping[] Voices { get; init; } = [];
     public VoiceReplacement[] Replacements { get; init; } = [];
     public AssetProvenance[] Provenance { get; init; } = [];

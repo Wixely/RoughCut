@@ -4,12 +4,13 @@ using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using RoughCut.Application;
 using RoughCut.Core;
+using RoughCut.Speech.Whisper;
 using RoughCut.Media;
 
 namespace RoughCut.Mcp;
 
 [McpServerToolType]
-public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManager jobs)
+public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManager jobs, SpeechSettings speech)
 {
     [McpServerTool(Name = "roughcut_read_project", ReadOnly = true)]
     [Description("Read and validate a workspace-relative RoughCut project, including its current revision.")]
@@ -92,6 +93,23 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         CancellationToken cancellationToken, string? denoPath = null)
         => TextAsync(() => operations.AcquireAsync(sourceUrl, destinationDirectory, denoPath, cancellationToken),
             ApplicationJson.Default.AcquisitionResult);
+
+    [McpServerTool(Name = "roughcut_transcribe_local")]
+    [Description("Transcribe one project media asset locally with the configured pinned Whisper base.en model, persist timed speech/captions, and advance the expected revision.")]
+    public async Task<CallToolResult> TranscribeLocalAsync(string projectPath, string assetId, long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(speech.ModelPath))
+                throw new InvalidOperationException("Local STT requires ROUGHCUT_STT_MODEL to name the verified base.en model path.");
+            using var transcriber = new WhisperLocalSpeechTranscriber(Path.GetFullPath(speech.ModelPath), speech.Language);
+            var project = await operations.TranscribeLocalAsync(projectPath, assetId, expectedRevision,
+                transcriber, speech.ChunkSeconds, cancellationToken);
+            return new() { Content = [new TextContentBlock { Text = JsonSerializer.Serialize(project, ProjectJson.Default.EditProject) }] };
+        }
+        catch (Exception exception) { return Error(exception); }
+    }
 
     [McpServerTool(Name = "roughcut_import_image")]
     [Description("Decode and validate a bounded base64 PNG, store it as a content-addressed portable project asset, and advance the expected revision.")]

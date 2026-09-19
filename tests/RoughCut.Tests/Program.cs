@@ -43,6 +43,7 @@ static EditProject Fixture() => new()
         new("still", "image", 0, 2000, Audio: "silence")],
     Speakers = [new("speaker-1", "Speaker 1")],
     Speech = [new("speech-1", "video", 1000, 2000, "Synthetic speech", ["speaker-1"], "corrected")],
+    Transcription = new("video", new string('a', 64), "fixture-stt", "fixture-model", "en", 30),
     Voices = [new("voice-1", "speaker-1", "qwen-tts", "configured-voice")],
     Replacements = [new("replacement-1", "speech-1", "voice-1", "Synthetic speech", "audio")],
     Provenance = [new("audio", "qwen-tts", "fixture-only", "video")]
@@ -203,6 +204,22 @@ if (args.Contains("--media", StringComparer.Ordinal))
             report.Segments.Select(segment => (segment.Start, segment.End)).SequenceEqual(new[] { (0L, 5000L), (5000L, 10000L), (10000L, 12000L) }) &&
             transcriber.MaximumBytes <= 5 * LocalSpeechProcessor.SampleRate * sizeof(short),
             "Local STT chunking or timed provenance is incorrect.");
+        var speechProjectPath = Path.Combine(testRoot, "speech-project.json");
+        await store.SaveAsync(speechProjectPath, speechProject with
+        {
+            Revision = 1,
+            Speech = [],
+            Transcription = null,
+            Voices = [],
+            Replacements = [],
+            Captions = null
+        }, 0);
+        var saved = await new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg)
+            .TranscribeLocalAsync("speech-project.json", "speech-source", 1, transcriber, chunkSeconds: 5);
+        Assert(saved.Revision == 2 && saved.Speech.Length == 3 && saved.Transcription is { Provider: "test-local", ChunkSeconds: 5 } &&
+            saved.Captions is { SourceKind: "local-stt", Selection: "recommended" } &&
+            File.Exists(Path.Combine(testRoot, saved.Captions.SourcePath.Replace('/', Path.DirectorySeparatorChar))),
+            "Local STT results were not persisted with portable caption/provenance data.");
         await Throws<NotSupportedException>(() => new LocalSpeechProcessor(ffmpeg).TranscribeAsync(
             speechProject with { Assets = [.. speechProject.Assets.Select(asset => asset.Id == "speech-source" ? asset with { Duration = LocalSpeechProcessor.MaxDurationSeconds * 1000L + 1 } : asset)] },
             Path.Combine(testRoot, "speech-project.json"), "speech-source", transcriber));
@@ -327,7 +344,7 @@ sealed class TestAcquisitionTool : IAcquisitionTool
         await File.WriteAllBytesAsync(Path.Combine(staging, "source.mkv"), "synthetic media"u8.ToArray(), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(staging, "source.info.json"),
             "{\"id\":\"fixture-id\",\"title\":\"Fixture title\",\"extractor\":\"fixture\",\"subtitles\":{\"en\":[]}}", cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(staging, "caption.en.srt"),
+        await File.WriteAllTextAsync(Path.Combine(staging, "source.en.srt"),
             "1\n00:00:00,000 --> 00:00:01,000\nCaption\n", cancellationToken);
         return new([], "");
     }

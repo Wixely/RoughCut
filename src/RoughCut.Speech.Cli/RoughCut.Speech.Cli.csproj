@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>roughcut-speech</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoughCut.Speech.Whisper/RoughCut.Speech.Whisper.csproj" />
+  </ItemGroup>
+</Project>
