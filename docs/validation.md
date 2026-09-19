@@ -1,0 +1,33 @@
+# Validation plan
+
+- Prepared: 2026-09-18
+- Updated: 2026-09-19
+- Review: Before each implementation slice and dependency change
+- Owner: Implementation agent
+- State: Windows foundation, bounded export and stdio MCP/job checks executed; full application acceptance pending
+
+See [foundation evidence](evidence/2026-09-19-foundation.md), [export evidence](evidence/2026-09-19-export.md) and [MCP evidence](evidence/2026-09-19-mcp.md): managed verification passes 32 checks. Run `.\scripts\verify.ps1 -PublishAot` for managed MCP/CLI checks plus the NativeAOT CLI path. The bounded copy/encode slice validates complete decoded content and timestamps; broader media, image rendering, host and speech gates remain pending.
+
+## First executable slice
+
+Use synthetic clips with visible frame/time identifiers and identifiable audio plus supplied timed captions. Record generation commands, tool versions, codec/container parameters and hashes. Keep generated binaries under ignored artifacts; commit reproducible fixture definitions and small non-personal textual expectations.
+
+1. JSON save/reopen preserves source timing, ordered slices, fixed crops and requested edit intent. Reject invalid source references, reversed/out-of-range times, unsupported schema versions and stale revisions. Atomic-save failure leaves the prior project usable.
+2. For explicitly supported copy-only cuts, preserve independent decode boundaries at both ends and verify retained frame content and audio continuity around every join. Record expected versus actual boundaries, packet timestamps, tolerances and output mapping. A successful subprocess or a keyframe flag is insufficient evidence.
+3. Reject an unsupported strict-copy cut with actionable alternatives and no silent encoding. Spatial crop selects encoding in an allowed mode and is rejected by copy-only mode. Reorder maps source intervals, captions and output timestamps consistently.
+4. Exercise tool failure, cancellation and an output collision without overwriting the source or presenting partial output as finished. Bound logs and process lifetime; test paths with spaces through argument-array invocation.
+
+## Broader release gates
+
+- Media: open/closed GOPs, B-frames, variable frame rate, nonzero start times, audio priming, stream incompatibility and codec changes; unknown combinations remain unsupported in strict mode.
+- Frame retrieval: synthetic visible frame IDs at keyframes and between them, VFR, nonzero start times, exact boundaries, final frame, gaps and invalid timestamps; assert requested versus actual presentation time and selected pixels. Verify orientation, dimensions, colour conversion, cancellation and bounded responses. An image-capable MCP client must actually receive/view the frame without local filesystem access. Timeline previews must resolve the specified revision, cuts, reordered slices, crops and inserted images consistently with export.
+- Image inputs/content: send encoded images through MCP, validate format/size/pixel limits and reject malformed payloads; round-trip hashes, provenance and portable references; exercise missing/changed assets, duplicate imports and interrupted writes. Prove frame inspection followed by incoming generated-image import, timed insertion, preview, reorder/remove, save/reopen and export. Verify duration, fit and explicit audio policy, stale-revision rejection, strict-copy rejection for rendered image clips, and unchanged copy eligibility for unused imported assets. External generation fixtures may be supplied; no generator integration is presumed.
+- Captions/STT: manual, rolling auto, translated, drifting, partial and missing captions; quality evidence, manual override and source-time alignment; long-file memory bounds.
+- Speakers: labelled multi-speaker fixtures with similar voices, short turns, chunk boundaries, unknown speakers and overlapping speech; measure assignment errors, retain uncertainty and verify rename/merge/split/correction round trips independently of caption selection.
+- Qwen TTS replacement: replace one selected speaker while retaining others; preview/revert, save/reopen, cut/reorder and cache invalidation; verify generated audio provenance, intelligibility, duration-fit limits, caption alignment, background preservation and A/V sync. Reject unsupported separation/overlap and strict copy-only requests explicitly. Exercise cancellation and missing model/runtime diagnostics; verify CLI/MCP/desktop parity and record actual Windows/Linux resource and runtime results before claiming support.
+- Editorial quality: labelled ad/no-ad examples, missed ads versus false removals reported separately, uncertain proposals reversible, no assumption that silence is unwanted content.
+- Jobs/hosts: cancellation/resume, disk-full behavior and revision conflicts; identical JSON revision and policy produce identical export resolution from CLI, MCP and desktop; headless execution requires no display/audio device.
+- Packaging: execute selected stack on Windows and Linux, including model loading, tool paths, seeking/audio and published NativeAOT where feasible. Build success does not establish runtime support.
+- Later server: authentication, configured root enforcement, URL/redirect validation, bounded downloads/uploads/jobs, and Windows Service/systemd/Docker lifecycle.
+
+Record each result with date, platform, dependency versions, fixture provenance, exact command, expected/observed outcome and limitations. Preserve failures as evidence. Recheck time-sensitive dependency claims before adoption. Keep the [build/test commands](development.md) aligned with the implementation.
