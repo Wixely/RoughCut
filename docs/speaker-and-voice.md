@@ -14,9 +14,11 @@ The bounded voice workflow is deliberately reversible:
 4. Retrieve the exact bytes through `voice-preview` or the MCP `audio/wav` content block from `roughcut_get_voice_preview`.
 5. Set the preview to `applied` after review, or `reverted` while retaining the source and generated preview.
 
-The project records provider, model, runtime, voice, language, text hash, audio hash, requested duration, actual duration and fit policy. WAVE data is capped at 16 MiB, parsed without executing supplied content, stored at `assets/audio/<sha256>.wav`, and checked again when read. Only exact-duration replacement is accepted for application. Overlapping speech, uncertain speaker assignments and any background policy other than `require-isolated-dialogue` are rejected. RoughCut does not yet verify that a source really contains isolated dialogue, mix generated audio into export, separate background sound, or synthesize directly.
+The project records provider, model, runtime, voice, language, text hash, audio hash, requested duration, actual duration and fit policy. WAVE data is capped at 16 MiB, parsed without executing supplied content, stored at `assets/audio/<sha256>.wav`, and checked again when read. `exact` requires equal durations. `time-stretch` accepts an actual/requested ratio from 0.8 through 1.25, resamples to the source's 48 kHz mono/stereo layout and produces the exact target sample count. Overlapping speech, uncertain speaker assignments and any background policy other than `require-isolated-dialogue` are rejected.
 
-Applied replacements make export return `unsupported-voice-replacement`; requested, previewed and reverted replacements do not change media output. This keeps review useful without implying that export rendered a replacement.
+An applied interval must be retained exactly once and wholly inside one video clip. Encoding-authorized export replaces source PCM only inside that interval, preserves source samples outside it, records the resolved sample mapping and validates final output against the fitted preview. Strict copy-only rejects the edit. Requested, previewed and reverted replacements do not change media output. The original WAVE remains untouched, so fitting and application are reversible.
+
+The isolated-dialogue policy is a reviewed assertion. RoughCut does not detect or separate background sound, add boundary fades, update caption text to replacement text, or render partial/duplicated replacement intervals. See the [voice-rendering evidence](evidence/2026-09-19-voice-rendering.md).
 
 The provider accepts only absolute loopback HTTP(S) endpoints. Before synthesis it checks `/api/status` for the exact configured model, loaded state and language, then posts the text and voice to `/v1/audio/speech`. It accepts at most 16 MiB of PCM WAVE data, honors caller cancellation and a 10-minute default timeout, and records the service version. `ROUGHCUT_QWEN_ENDPOINT` is required; `ROUGHCUT_QWEN_API_KEY` and `ROUGHCUT_QWEN_TIMEOUT_SECONDS` are optional. The endpoint is process configuration and is never persisted in a project.
 
@@ -37,4 +39,4 @@ dotnet run --project src/RoughCut.Cli -- voice-state project.json 4 replacement-
 dotnet run --project src/RoughCut.Cli -- voice-state project.json 5 replacement-1 reverted
 ```
 
-Next owner/action: **Implementation agent: add explicit duration fitting and replacement rendering, then evaluate diarization against labelled fixtures; Wixely: provide representative multi-speaker and replacement examples.**
+Next owner/action: **Implementation agent: evaluate diarization against labelled fixtures and feed stable assignments into the correction workflow; Wixely: provide representative multi-speaker and replacement examples.**

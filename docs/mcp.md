@@ -38,7 +38,7 @@ The current tools are:
 | `roughcut_import_voice_preview` | Import bounded PCM WAVE with synthesis provenance |
 | `roughcut_synthesize_voice` | Validate the configured loopback Qwen service and generate a revision-safe bounded preview |
 | `roughcut_get_voice_preview` | Return metadata and an actual `audio/wav` MCP content block |
-| `roughcut_set_voice_replacement_state` | Apply or revert an exact-duration preview |
+| `roughcut_set_voice_replacement_state` | Apply or revert an exact or bounded time-stretch preview; applied audio renders through encoding-authorized export |
 | `roughcut_import_image` | Validate an incoming base64 PNG and add a content-addressed image asset with provenance |
 | `roughcut_acquire_url` | Run configured standalone yt-dlp for one bounded staged media/subtitle acquisition |
 | `roughcut_preflight_export` | Return exact supported/unsupported export decisions |

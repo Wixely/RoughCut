@@ -12,5 +12,6 @@
 | [0008](0008-evidence-backed-analysis.md) | 2026-09-19 | Accepted for bounded MCP/CLI MVP | Persist evidence before conservative revision-bound editorial proposals |
 | [0009](0009-reversible-speaker-and-voice-boundary.md) | 2026-09-19 | Accepted for bounded CLI/MCP foundation | Revisioned speaker corrections and provenance-rich reversible Qwen preview import |
 | [0010](0010-loopback-qwen-provider.md) | 2026-09-19 | Accepted for bounded local MVP | Loopback-only Qwen synthesis through a measured WSL/CUDA service |
+| [0011](0011-bounded-voice-rendering.md) | 2026-09-19 | Accepted for bounded local MVP | Explicit 0.8x–1.25x fitting and sample-validated isolated-dialogue replacement export |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.
