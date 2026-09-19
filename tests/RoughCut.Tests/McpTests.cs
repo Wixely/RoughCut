@@ -27,7 +27,8 @@ internal static class McpTests
             var tools = await client.ListToolsAsync();
             var names = tools.Select(tool => tool.Name).ToHashSet(StringComparer.Ordinal);
             string[] expected = ["roughcut_read_project", "roughcut_inspect_video", "roughcut_create_project",
-                "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_import_image", "roughcut_preflight_export",
+                "roughcut_get_frame", "roughcut_get_timeline_frame", "roughcut_apply_edits", "roughcut_import_captions", "roughcut_select_captions",
+                "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
                 "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
         });
@@ -124,6 +125,26 @@ internal static class McpTests
             });
             Assert(stale.IsError == true && stale.Content.OfType<TextContentBlock>().Single().Text.Contains("revision conflict", StringComparison.OrdinalIgnoreCase),
                 "Stale MCP edit was not reported as a revision conflict.");
+        });
+
+        await check("MCP caption assessment recommends and records a source", async () =>
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "manual-en.srt"), "1\n00:00:00,000 --> 00:00:01,000\nManual text\n");
+            await File.WriteAllTextAsync(Path.Combine(root, "automatic-en.srt"), "1\n00:00:00,000 --> 00:00:02,000\nAutomatic text\n");
+            await using var client = await CreateClientAsync(command, arguments);
+            var selected = await client.CallToolAsync("roughcut_select_captions", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "export-project.json",
+                ["assetId"] = "source-1",
+                ["expectedRevision"] = 4L,
+                ["preferredLanguage"] = "en",
+                ["candidates"] = JsonDocument.Parse("""[{"id":"automatic","path":"automatic-en.srt","sourceKind":"automatic","language":"en"},{"id":"manual","path":"manual-en.srt","sourceKind":"manual","language":"en"}]""").RootElement.Clone()
+            });
+            Assert(selected.IsError != true, "MCP caption selection failed.");
+            using var response = JsonDocument.Parse(selected.Content.OfType<TextContentBlock>().Single().Text);
+            Assert(response.RootElement.GetProperty("selectedId").GetString() == "manual" &&
+                response.RootElement.GetProperty("project").GetProperty("captions").GetProperty("selection").GetString() == "recommended",
+                "MCP caption recommendation or provenance is incorrect.");
         });
 
         await check("MCP image export jobs complete, persist and cancel safely", async () =>

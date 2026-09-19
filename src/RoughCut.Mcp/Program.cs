@@ -20,8 +20,9 @@ try
     var boundary = new WorkspaceBoundary(workspace);
     var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
     var ffprobe = Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe";
+    var ytDlp = Environment.GetEnvironmentVariable("ROUGHCUT_YTDLP") ?? "yt-dlp";
     builder.Services.AddSingleton(boundary);
-    builder.Services.AddSingleton(new RoughCutOperations(boundary, ffmpeg, ffprobe));
+    builder.Services.AddSingleton(new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp));
     builder.Services.AddSingleton(new ExportJobManager(boundary, ffmpeg, ffprobe));
     var toolJson = new System.Text.Json.JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
     toolJson.TypeInfoResolverChain.Insert(0, ProjectJson.Default);

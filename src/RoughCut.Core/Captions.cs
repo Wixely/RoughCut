@@ -5,8 +5,15 @@ using System.Text;
 namespace RoughCut.Core;
 
 public sealed record CaptionCue(string Id, long Start, long End, string Text);
-public sealed record CaptionTrack(string AssetId, string SourcePath, string SourceSha256, TimeBase TimeBase, CaptionCue[] Cues);
+public sealed record CaptionTrack(string AssetId, string SourcePath, string SourceSha256, TimeBase TimeBase, CaptionCue[] Cues,
+    string SourceKind = "supplied", string Language = "und", string Selection = "explicit", string? CandidateId = null,
+    int CoverageBasisPoints = 0);
 public sealed record OutputCaption(string CueId, string ClipId, MediaTime Start, MediaTime End, string Text);
+public sealed record CaptionCandidate(string Id, string Path, string SourceKind, string Language = "und");
+public sealed record CaptionCandidateAssessment(string Id, string Path, string SourceKind, string Language,
+    bool Valid, int CueCount, int CoverageBasisPoints, int Score, string[] Reasons, string? Error = null);
+public sealed record CaptionSelectionResult(string SelectedId, bool ExplicitOverride,
+    CaptionCandidateAssessment[] Candidates, EditProject Project);
 
 public static class Captions
 {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using RoughCut.Application;
 using RoughCut.Core;
 using RoughCut.Media;
 
@@ -129,6 +130,50 @@ await Check("Oversized project rejected", async () =>
 {
     await Throws<InvalidDataException>(() => store.SaveAsync(Path.Combine(testRoot, "large.json"), Fixture() with { Prompt = new('x', ProjectStore.MaxDocumentBytes) }, 0));
 });
+await Check("Caption selection records quality provenance and allows explicit override", async () =>
+{
+    var projectPath = Path.Combine(testRoot, "caption-selection.json");
+    await store.SaveAsync(projectPath, Fixture() with { Revision = 1, Captions = null }, 0);
+    await File.WriteAllTextAsync(Path.Combine(testRoot, "manual-en.srt"), "1\n00:00:00,000 --> 00:00:05,000\nManual captions\n");
+    await File.WriteAllTextAsync(Path.Combine(testRoot, "automatic-en.srt"), "1\n00:00:00,000 --> 00:00:09,000\nAutomatic captions\n");
+    await File.WriteAllTextAsync(Path.Combine(testRoot, "invalid.srt"), "not srt");
+    CaptionCandidate[] candidates =
+    [
+        new("auto-en", "automatic-en.srt", "automatic", "en"),
+        new("manual-en", "manual-en.srt", "manual", "en"),
+        new("invalid", "invalid.srt", "supplied", "en")
+    ];
+    var operations = new RoughCutOperations(new WorkspaceBoundary(testRoot));
+    var recommended = await operations.SelectCaptionsAsync("caption-selection.json", "video", candidates, 1, "en");
+    Assert(recommended.SelectedId == "manual-en" && !recommended.ExplicitOverride &&
+        recommended.Project.Captions is { SourceKind: "manual", Selection: "recommended", CoverageBasisPoints: 5000 } &&
+        recommended.Candidates.Single(item => item.Id == "invalid").Valid == false,
+        "Caption recommendation did not preserve quality/provenance evidence.");
+    var overridden = await operations.SelectCaptionsAsync("caption-selection.json", "video", candidates, 2, "en", "auto-en");
+    Assert(overridden.SelectedId == "auto-en" && overridden.ExplicitOverride &&
+        overridden.Project.Captions is { SourceKind: "automatic", Selection: "override", CoverageBasisPoints: 9000 },
+        "Explicit caption override was not persisted.");
+    await Throws<RevisionConflictException>(() => operations.SelectCaptionsAsync("caption-selection.json", "video", candidates, 2, "en"));
+});
+await Check("yt-dlp acquisition is bounded, staged and strips URL secrets from provenance", async () =>
+{
+    var fake = new TestAcquisitionTool();
+    var result = await new YtDlpAcquirer(new WorkspaceBoundary(testRoot), "fake-yt-dlp", fake)
+        .AcquireAsync("https://example.test/watch?id=private-token#fragment", "acquired");
+    Assert(result.Source == "https://example.test/watch" && result.MediaPath == "source.mkv" &&
+        result.Captions is [{ Language: "en", SourceKind: "manual", CueCount: 1 }] &&
+        File.Exists(Path.Combine(testRoot, "acquired", "acquisition.json")) &&
+        fake.DownloadArguments is not null && fake.DownloadArguments.Contains("--ignore-config") &&
+        fake.DownloadArguments.Contains("--no-js-runtimes") && fake.DownloadArguments.Contains("--no-remote-components") &&
+        fake.DownloadArguments.Contains("--no-playlist") && fake.DownloadArguments[^2] == "--",
+        "Acquisition safety policy or portable manifest is incorrect.");
+    await Throws<ArgumentException>(() => new YtDlpAcquirer(new WorkspaceBoundary(testRoot), "fake", fake)
+        .AcquireAsync("file:///private/video", "invalid-acquisition"));
+    await Throws<OperationCanceledException>(() => new YtDlpAcquirer(new WorkspaceBoundary(testRoot), "fake", new TestAcquisitionTool())
+        .AcquireAsync("https://example.test/cancel", "cancelled-acquisition", cancellationToken: new(true)));
+    Assert(!Directory.Exists(Path.Combine(testRoot, "cancelled-acquisition")) &&
+        !Directory.EnumerateDirectories(testRoot, ".roughcut-acquire-*").Any(), "Cancelled acquisition leaked staged output.");
+});
 
 if (args.Contains("--media", StringComparer.Ordinal))
 {
@@ -140,6 +185,27 @@ if (args.Contains("--media", StringComparer.Ordinal))
         await ToolProcess.RunAsync(ffmpeg,
             ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=10:duration=2",
              "-c:v", "libx264", "-qp", "0", "-g", "20", "-threads", "1", "-an", "-y", source]);
+    });
+    await Check("Local speech processing chunks bounded PCM and preserves timed provenance", async () =>
+    {
+        var audio = Path.Combine(testRoot, "speech.wav");
+        await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=12",
+            "-c:a", "pcm_s16le", "-y", audio]);
+        var speechProject = Fixture() with
+        {
+            TimeBase = new(1, 1000),
+            Assets = [.. Fixture().Assets, new("speech-source", "audio", "speech.wav", await MediaReader.FingerprintAsync(audio), 12000, 0, 0, "audio/wav")]
+        };
+        var transcriber = new TestSpeechTranscriber();
+        var report = await new LocalSpeechProcessor(ffmpeg).TranscribeAsync(speechProject,
+            Path.Combine(testRoot, "speech-project.json"), "speech-source", transcriber, chunkSeconds: 5);
+        Assert(report.Chunks == 3 && report.Provider == "test-local" && report.Model == "timed-fixture" &&
+            report.Segments.Select(segment => (segment.Start, segment.End)).SequenceEqual(new[] { (0L, 5000L), (5000L, 10000L), (10000L, 12000L) }) &&
+            transcriber.MaximumBytes <= 5 * LocalSpeechProcessor.SampleRate * sizeof(short),
+            "Local STT chunking or timed provenance is incorrect.");
+        await Throws<NotSupportedException>(() => new LocalSpeechProcessor(ffmpeg).TranscribeAsync(
+            speechProject with { Assets = [.. speechProject.Assets.Select(asset => asset.Id == "speech-source" ? asset with { Duration = LocalSpeechProcessor.MaxDurationSeconds * 1000L + 1 } : asset)] },
+            Path.Combine(testRoot, "speech-project.json"), "speech-source", transcriber));
     });
     await Check("Frame between keyframes has exact time and expected pixels", async () =>
     {
@@ -217,6 +283,14 @@ if (args.Contains("--media", StringComparer.Ordinal))
             Assert(await MediaReader.FingerprintAsync(framePath) == before, "CLI overwrote an existing output.");
             await Throws<MediaToolException>(() => RunCli("save", candidate, projectPath, "1"));
             await Throws<MediaToolException>(() => RunCli("frame", source, "2", Path.Combine(testRoot, "outside.png")));
+            var captions = Path.Combine(testRoot, "cli-captions.srt");
+            await File.WriteAllTextAsync(captions, "1\n00:00:00,000 --> 00:00:01,000\nCLI captions\n");
+            var captionCandidates = Path.Combine(testRoot, "cli-caption-candidates.json");
+            await File.WriteAllTextAsync(captionCandidates, JsonSerializer.Serialize(
+                new CaptionCandidate[] { new("cli-manual", "cli-captions.srt", "manual", "en") }, ProjectJson.Default.CaptionCandidateArray));
+            var selected = await RunCli("captions-select", projectPath, "source-1", captionCandidates, "2", "en");
+            var selection = JsonSerializer.Deserialize(selected.Output, ProjectJson.Default.CaptionSelectionResult)!;
+            Assert(selection.SelectedId == "cli-manual" && selection.Project.Revision == 3, "CLI caption assessment failed.");
         });
     }
 }
@@ -226,3 +300,44 @@ await McpTests.RunAsync(Check, args, testRoot);
 
 Console.WriteLine($"{passed} passed; {failures} failed.");
 return failures == 0 ? 0 : 1;
+
+sealed class TestSpeechTranscriber : ILocalSpeechTranscriber
+{
+    public int MaximumBytes { get; private set; }
+
+    public Task<LocalSpeechResult> TranscribePcm16kMonoAsync(ReadOnlyMemory<byte> pcm, CancellationToken cancellationToken = default)
+    {
+        MaximumBytes = Math.Max(MaximumBytes, pcm.Length);
+        var duration = pcm.Length * 1000L / (LocalSpeechProcessor.SampleRate * sizeof(short));
+        return Task.FromResult(new LocalSpeechResult("test-local", "timed-fixture", "en",
+            [new(0, duration, "synthetic speech")]));
+    }
+}
+
+sealed class TestAcquisitionTool : IAcquisitionTool
+{
+    public IReadOnlyList<string>? DownloadArguments { get; private set; }
+
+    public async Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.Contains("--version")) return new("2026.09.01\n"u8.ToArray(), "");
+        DownloadArguments = arguments;
+        var index = arguments.IndexOf("--paths");
+        var staging = arguments[index + 1];
+        await File.WriteAllBytesAsync(Path.Combine(staging, "source.mkv"), "synthetic media"u8.ToArray(), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(staging, "source.info.json"),
+            "{\"id\":\"fixture-id\",\"title\":\"Fixture title\",\"extractor\":\"fixture\",\"subtitles\":{\"en\":[]}}", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(staging, "caption.en.srt"),
+            "1\n00:00:00,000 --> 00:00:01,000\nCaption\n", cancellationToken);
+        return new([], "");
+    }
+}
+
+static class ListTestExtensions
+{
+    public static int IndexOf(this IReadOnlyList<string> values, string value)
+    {
+        for (var index = 0; index < values.Count; index++) if (values[index] == value) return index;
+        return -1;
+    }
+}

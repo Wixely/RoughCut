@@ -1,0 +1,14 @@
+[
+  {
+    "id": "manual-en",
+    "path": "captions/manual.en.srt",
+    "sourceKind": "manual",
+    "language": "en"
+  },
+  {
+    "id": "automatic-en",
+    "path": "captions/automatic.en.srt",
+    "sourceKind": "automatic",
+    "language": "en"
+  }
+]

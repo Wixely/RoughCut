@@ -182,6 +182,37 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut: assess caption candidates",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "captions-select",
+        "${input:projectPath}",
+        "${input:assetId}",
+        "${input:captionCandidatesPath}",
+        "${input:expectedRevision}",
+        "${input:preferredLanguage}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "RoughCut: acquire URL",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "acquire",
+        "${input:sourceUrl}",
+        "${input:acquisitionDirectory}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: preflight export",
       "type": "coreclr",
       "request": "launch",
@@ -296,6 +327,30 @@
       "type": "promptString",
       "description": "UTF-8 SRT file inside the project directory",
       "default": "artifacts/demo/source.srt"
+    },
+    {
+      "id": "captionCandidatesPath",
+      "type": "promptString",
+      "description": "Caption candidate array JSON",
+      "default": "examples/caption-candidates.json"
+    },
+    {
+      "id": "preferredLanguage",
+      "type": "promptString",
+      "description": "Preferred caption language tag",
+      "default": "en"
+    },
+    {
+      "id": "sourceUrl",
+      "type": "promptString",
+      "description": "HTTP(S) video URL",
+      "default": "https://example.com/video"
+    },
+    {
+      "id": "acquisitionDirectory",
+      "type": "promptString",
+      "description": "New acquisition directory",
+      "default": "artifacts/acquired/video"
     },
     {
       "id": "exportDirectory",

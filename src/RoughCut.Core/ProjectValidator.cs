@@ -108,6 +108,17 @@ public static class ProjectValidator
             Check(IsPortablePath(captions.SourcePath), "captions.sourcePath", "Caption source path must be portable.");
             Check(captions.SourceSha256.Length == 64 && captions.SourceSha256.All(Uri.IsHexDigit), "captions.sourceSha256", "Invalid caption source hash.");
             Check(captions.TimeBase.IsValid, "captions.timeBase", "Caption time base must be positive.");
+            Check(captions.SourceKind is "supplied" or "manual" or "automatic" or "local-stt",
+                "captions.sourceKind", "Unknown caption source kind.");
+            Check(!string.IsNullOrWhiteSpace(captions.Language) && captions.Language.Length <= 35 &&
+                captions.Language.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_'),
+                "captions.language", "Caption language must be a short language tag.");
+            Check(captions.Selection is "explicit" or "recommended" or "override",
+                "captions.selection", "Unknown caption selection policy.");
+            Check(captions.CandidateId is null || !string.IsNullOrWhiteSpace(captions.CandidateId),
+                "captions.candidateId", "Caption candidate ID cannot be empty.");
+            Check(captions.CoverageBasisPoints is >= 0 and <= 10_000,
+                "captions.coverageBasisPoints", "Caption coverage must be between 0 and 10,000 basis points.");
             Check(captions.Cues.Length <= 10_000, "captions.cues", "Too many caption cues.");
             ids.Clear();
             foreach (var cue in captions.Cues)

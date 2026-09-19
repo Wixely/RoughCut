@@ -11,6 +11,7 @@ public sealed record ExportJob(
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(ExportJob))]
+[JsonSerializable(typeof(AcquisitionResult))]
 public partial class ApplicationJson : JsonSerializerContext;
 
 public sealed class ExportJobManager : IDisposable

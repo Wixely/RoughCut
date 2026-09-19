@@ -76,6 +76,8 @@ public sealed record TimelineFrameInfo(
 [JsonSerializable(typeof(FrameInfo))]
 [JsonSerializable(typeof(TimelineFrameInfo))]
 [JsonSerializable(typeof(EditOperation[]))]
+[JsonSerializable(typeof(CaptionCandidate[]))]
+[JsonSerializable(typeof(CaptionSelectionResult))]
 [JsonSerializable(typeof(ExportPlan))]
 [JsonSerializable(typeof(ExportReport))]
 public partial class ProjectJson : JsonSerializerContext;

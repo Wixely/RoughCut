@@ -5,7 +5,8 @@ using RoughCut.Media;
 
 namespace RoughCut.Application;
 
-public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpeg = "ffmpeg", string ffprobe = "ffprobe")
+public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpeg = "ffmpeg", string ffprobe = "ffprobe",
+    string ytDlp = "yt-dlp")
 {
     private readonly ProjectStore _store = new();
     private readonly MediaReader _media = new(ffmpeg, ffprobe);
@@ -80,6 +81,41 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return edited;
     }
 
+    public async Task<CaptionSelectionResult> SelectCaptionsAsync(string projectPath, string assetId,
+        CaptionCandidate[] candidates, long expectedRevision, string preferredLanguage = "en",
+        string? overrideCandidateId = null, CancellationToken token = default)
+    {
+        if (candidates.Length is 0 or > 32 || candidates.Select(candidate => candidate.Id).Distinct(StringComparer.Ordinal).Count() != candidates.Length)
+            throw new ArgumentException("Provide 1 to 32 caption candidates with unique IDs.");
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        if (project.Revision != expectedRevision) throw new RevisionConflictException();
+        var asset = project.Assets.SingleOrDefault(item => item.Id == assetId && item.Kind is "video" or "audio")
+            ?? throw new KeyNotFoundException("Timed media asset was not found in the project.");
+        var assessed = new List<(CaptionCandidateAssessment Assessment, CaptionCue[]? Cues, byte[]? Bytes)>();
+        foreach (var candidate in candidates)
+            assessed.Add(await CaptionSelection.AssessAsync(path, project.TimeBase, asset, candidate, preferredLanguage, workspace, token));
+        var valid = assessed.Where(item => item.Assessment.Valid).ToArray();
+        if (valid.Length == 0) throw new InvalidDataException("No valid caption candidate was available.");
+        var selected = overrideCandidateId is null
+            ? valid.OrderByDescending(item => item.Assessment.Score).ThenBy(item => item.Assessment.Id, StringComparer.Ordinal).First()
+            : valid.SingleOrDefault(item => item.Assessment.Id == overrideCandidateId);
+        if (selected.Assessment is null)
+            throw new ArgumentException("Caption override must identify a valid candidate.");
+        var edited = project with
+        {
+            Revision = checked(expectedRevision + 1),
+            Captions = new(assetId, selected.Assessment.Path,
+                Convert.ToHexStringLower(SHA256.HashData(selected.Bytes!)), new(1, 1000), selected.Cues!,
+                selected.Assessment.SourceKind, selected.Assessment.Language,
+                overrideCandidateId is null ? "recommended" : "override", selected.Assessment.Id,
+                selected.Assessment.CoverageBasisPoints)
+        };
+        await _store.SaveAsync(path, edited, expectedRevision, token);
+        return new(selected.Assessment.Id, overrideCandidateId is not null,
+            assessed.Select(item => item.Assessment).ToArray(), edited);
+    }
+
     public async Task<EditProject> ImportPngAsync(string projectPath, string assetId, string base64Data,
         long expectedRevision, string provider, string modelVersion, CancellationToken token = default)
     {
@@ -151,4 +187,8 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         int maxWidth, CancellationToken token = default)
         => new TimelinePreviewer(ffmpeg, ffprobe).GetFrameAsync(workspace.Resolve(projectPath), expectedRevision,
             timelineTicks, maxWidth, token);
+
+    public Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
+        string? denoPath = null, CancellationToken token = default)
+        => new YtDlpAcquirer(workspace, ytDlp).AcquireAsync(sourceUrl, destinationDirectory, denoPath, token);
 }

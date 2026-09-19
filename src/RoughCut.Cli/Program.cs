@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using RoughCut.Application;
 using RoughCut.Core;
 using RoughCut.Media;
 
@@ -11,6 +12,7 @@ var token = cancellation.Token;
 var store = new ProjectStore();
 var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
 var ffprobe = Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe";
+var ytDlp = Environment.GetEnvironmentVariable("ROUGHCUT_YTDLP") ?? "yt-dlp";
 var media = new MediaReader(ffmpeg, ffprobe);
 try
 {
@@ -28,13 +30,15 @@ try
                   timeline-frame <project.json> <revision> <seconds> <new-output.png>
                   edit <project.json> <operations.json> <expected-revision>
                   captions <project.json> <asset-id> <source.srt> <expected-revision>
+                  captions-select <project.json> <asset-id> <candidates.json> <expected-revision> <preferred-language> [override-candidate-id]
+                  acquire <url> <new-output-directory> [deno-executable]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
 
                 Frame requests use source-relative presentation time. JSON metadata goes to stdout.
                 Export is bounded to the documented Matroska video/PCM fixture matrix.
-                Speech inference and timed image rendering are not implemented yet.
-                Set ROUGHCUT_FFMPEG / ROUGHCUT_FFPROBE to override executable locations.
+                Local speech inference requires a separately configured compatible runtime.
+                Set ROUGHCUT_FFMPEG / ROUGHCUT_FFPROBE / ROUGHCUT_YTDLP to override executable locations.
                 """);
             break;
         case ["validate", var path]:
@@ -60,6 +64,15 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
+        case ["acquire", var sourceUrl, var destination, .. var acquisitionOptions] when acquisitionOptions.Length <= 1:
+            {
+                var fullDestination = Path.GetFullPath(destination);
+                var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
+                var result = await new YtDlpAcquirer(boundary, ytDlp).AcquireAsync(sourceUrl,
+                    Path.GetFileName(fullDestination), acquisitionOptions.FirstOrDefault(), token);
+                Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.AcquisitionResult));
+                break;
+            }
         case ["captions", var path, var assetId, var sourcePath, var expected]:
             {
                 var project = await store.LoadAsync(path, token);
@@ -71,6 +84,20 @@ try
                 var edited = project with { Revision = checked(revision + 1), Captions = new(assetId, relative, Convert.ToHexStringLower(SHA256.HashData(bytes)), new(1, 1000), cues) };
                 await store.SaveAsync(path, edited, revision, token);
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["captions-select", var path, var assetId, var candidatesPath, var expected, var preferredLanguage, .. var selectionOptions]
+            when selectionOptions.Length <= 1:
+            {
+                var fullProjectPath = Path.GetFullPath(path);
+                var root = Path.GetDirectoryName(fullProjectPath)!;
+                var candidates = JsonSerializer.Deserialize(
+                    await ProjectFiles.ReadBoundedAsync(candidatesPath, ProjectStore.MaxDocumentBytes, token),
+                    ProjectJson.Default.CaptionCandidateArray) ?? throw new InvalidDataException("Caption candidates cannot be null.");
+                var operations = new RoughCutOperations(new WorkspaceBoundary(root), ffmpeg, ffprobe);
+                var result = await operations.SelectCaptionsAsync(Path.GetFileName(fullProjectPath), assetId, candidates,
+                    long.Parse(expected, CultureInfo.InvariantCulture), preferredLanguage, selectionOptions.FirstOrDefault(), token);
+                Console.WriteLine(JsonSerializer.Serialize(result, ProjectJson.Default.CaptionSelectionResult));
                 break;
             }
         case ["preflight", var path]:

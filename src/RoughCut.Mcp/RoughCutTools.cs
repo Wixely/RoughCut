@@ -79,6 +79,20 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         long expectedRevision, CancellationToken cancellationToken) => TextAsync(
             () => operations.ImportCaptionsAsync(projectPath, assetId, captionPath, expectedRevision, cancellationToken), ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_select_captions")]
+    [Description("Assess bounded project-local SRT candidates by provenance, language and coverage, then revision-safely select the recommendation or an explicit override.")]
+    public Task<CallToolResult> SelectCaptionsAsync(string projectPath, string assetId, CaptionCandidate[] candidates,
+        long expectedRevision, string preferredLanguage, CancellationToken cancellationToken, string? overrideCandidateId = null)
+        => TextAsync(() => operations.SelectCaptionsAsync(projectPath, assetId, candidates, expectedRevision,
+            preferredLanguage, overrideCandidateId, cancellationToken), ProjectJson.Default.CaptionSelectionResult);
+
+    [McpServerTool(Name = "roughcut_acquire_url")]
+    [Description("Acquire one HTTP(S) video plus available subtitles through a configured standalone yt-dlp into a new bounded workspace directory.")]
+    public Task<CallToolResult> AcquireAsync(string sourceUrl, string destinationDirectory,
+        CancellationToken cancellationToken, string? denoPath = null)
+        => TextAsync(() => operations.AcquireAsync(sourceUrl, destinationDirectory, denoPath, cancellationToken),
+            ApplicationJson.Default.AcquisitionResult);
+
     [McpServerTool(Name = "roughcut_import_image")]
     [Description("Decode and validate a bounded base64 PNG, store it as a content-addressed portable project asset, and advance the expected revision.")]
     public Task<CallToolResult> ImportImageAsync(string projectPath, string assetId, string base64Png,

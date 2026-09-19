@@ -5,5 +5,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../RoughCut.Media/RoughCut.Media.csproj" />
+    <ProjectReference Include="../RoughCut.Application/RoughCut.Application.csproj" />
   </ItemGroup>
 </Project>
