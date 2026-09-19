@@ -32,7 +32,7 @@ General multitrack compositing, transitions, automatic source separation, voice 
 | M1: Foundation | Typed project/timing/speech/image contracts, validation, revision saves, local inspection and frame extraction, runnable CLI/debugging | Implementation agent | Initial implementation verified; remaining contract work below |
 | M2: Reproducible edit/export | Caption provenance, supplied captions and explicit edits; strict copy feasibility and encoding path with decoded join checks | Implementation agent | Bounded Windows slice verified; broader analysis/synthesis provenance continues in RC-01 |
 | M3: Agent workflow | Shared jobs and stdio MCP over tested operations, validated image import/timed stills and timeline preview | Implementation agent | Bounded jobs/MCP/frame/import/insert/preview/export path verified; interactive agent visual interpretation remains RC-10 acceptance |
-| M4: Speech and review | Local STT/diarization, bounded Qwen replacement and minimal desktop preview/editor | Implementation agent; Wixely for runtime/UI tradeoffs | RC-03 speech subset, RC-09/06 |
+| M4: Speech and review | Local STT/diarization, bounded Qwen replacement and minimal desktop preview/editor | Implementation agent; Wixely for runtime/UI tradeoffs | RC-03 deterministic speech boundary verified; live provider, RC-09 and RC-06 remain |
 | M5: Acceptance | Full workflow through MCP and desktop, media regression matrix, published Windows/Linux execution | Implementation agent | RC-07; MVP is not complete until gates pass |
 
 ## What works now
@@ -43,4 +43,4 @@ The current schema is a development baseline. Speaker/image fields round-trip, a
 
 Frame extraction currently indexes and decodes from the beginning, bounded to 100,000 frames, 16 MiB tool output and a 60-second per-tool timeout. This proves timestamp selection before adding cached seek indexes for long videos. It handles tested SDR, unrotated, square-pixel fixtures; rotation, non-square pixels, HDR and changing frame dimensions are rejected. Export has stricter documented limits and validates every retained or rendered frame/sample before publishing. There is a bounded stdio MCP host, PNG importer and timed-image renderer; there is no GUI or model runtime yet.
 
-Recommended next action: **Implementation agent: begin M2 / RC-03** with bounded local caption acquisition and STT evaluation. Broader format and rendering features need equivalent media evidence before acceptance.
+Recommended next action: **Wixely: resolve the Deno and native Bantz/Whisper dependency choices; Implementation agent: execute live RC-03 provider acceptance after approval.** Broader format and rendering features need equivalent media evidence before acceptance.

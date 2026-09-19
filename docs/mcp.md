@@ -25,7 +25,9 @@ The current tools are:
 | `roughcut_get_timeline_frame` | Resolve an exact project revision/timeline time and return metadata plus the rendered `image/png` content block |
 | `roughcut_apply_edits` | Apply one revision-checked edit batch |
 | `roughcut_import_captions` | Import a bounded project-local SRT |
+| `roughcut_select_captions` | Assess SRT candidates by provenance, language and coverage, then persist a recommendation or explicit override |
 | `roughcut_import_image` | Validate an incoming base64 PNG and add a content-addressed image asset with provenance |
+| `roughcut_acquire_url` | Run configured standalone yt-dlp for one bounded staged media/subtitle acquisition |
 | `roughcut_preflight_export` | Return exact supported/unsupported export decisions |
 | `roughcut_start_export` | Queue a persisted export job |
 | `roughcut_get_job` | Read job state and coarse progress |
@@ -35,4 +37,4 @@ Incoming PNGs are capped at 8 MiB and 8K pixels, require valid chunk checksums, 
 
 Jobs are serialized atomically under `<workspace>/.roughcut/jobs`, retain at most 100 records and run exports one at a time. An interrupted `queued` or `running` checkpoint becomes `failed` when the next host starts; automatic resume is not claimed. Export staging cleanup and atomic bundle publication remain the export engine's responsibility.
 
-The executable protocol checks launch the host with the official MCP client, list all 12 tools, receive and decode source and revision-aware timeline PNG content blocks, reject workspace escapes and stale revisions, import and insert a PNG, complete and validate the encoded image export, and cancel a separate durable export without publishing output. The stdio host is currently a normal .NET deployment; NativeAOT publication has not been evaluated for the reflection-based MCP tool schema.
+The executable protocol checks launch the host with the official MCP client, list all 14 tools, receive and decode source and revision-aware timeline PNG content blocks, assess and persist caption provenance, reject workspace escapes and stale revisions, import and insert a PNG, complete and validate the encoded image export, and cancel a separate durable export without publishing output. URL acquisition is verified through a deterministic fake external tool; no live site was contacted. The stdio host is currently a normal .NET deployment; NativeAOT publication has not been evaluated for the reflection-based MCP tool schema.

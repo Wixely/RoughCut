@@ -6,11 +6,11 @@
 
 ## Current state
 
-The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion and durable [bounded validated export](export.md) jobs. Windows managed verification passes 33 checks; see [timed-image evidence](evidence/2026-09-19-timed-images.md), [MCP evidence](evidence/2026-09-19-mcp.md), [export evidence](evidence/2026-09-19-export.md) and [commands](development.md). There is no GUI, inference or speech runtime yet. The implementation is recorded in local commits; no remote or license is selected.
+The [working MVP](mvp.md) now has shared .NET 10 core/media/application APIs, CLI commands and a [stdio MCP host](mcp.md) for projects, revision-safe edits, bounded acquisition/caption selection, supplied SRT/PNG import, source/timeline frame retrieval, timed image insertion, provider-neutral timed speech chunks and durable [bounded validated export](export.md) jobs. Windows managed verification passes 37 checks; see [RC-03 evidence](evidence/2026-09-19-rc03-foundation.md), [timed-image evidence](evidence/2026-09-19-timed-images.md), [export evidence](evidence/2026-09-19-export.md) and [commands](development.md). There is no GUI, semantic inference or adopted speech runtime yet. No remote or license is selected.
 
 The [implementation brief](product-and-architecture.md) carries forward the complete discovery plan, including requirements, architecture boundaries, illustrative JSON, export semantics, reuse candidates, open questions and risks. The original [PLAN note](../../PLAN/inbox/roughcut.md) is historical discovery context; maintain new implementation decisions here.
 
-## Begin local speech foundation (RC-03)
+## Qualify live acquisition and speech providers (remaining RC-03)
 
 On 2026-09-19 the user added speaker distinction and voice replacement via Qwen TTS. These are confirmed product requirements, now covered by the implementation brief and RC-09. No diarization backend, Qwen model/runtime or deployment mode has been adopted or tested. Include speaker assignments, corrections, voice mappings and replacement provenance in RC-01; keep the initial deterministic export proof bounded. RC-09 follows the speech/export foundations and joins CLI/MCP/desktop before release validation. Strict copy-only export must reject active voice replacements.
 
@@ -18,11 +18,11 @@ The user also required images retrieved from any valid video timestamp for agent
 
 The core now includes caption provenance/retiming, transactional edit batches and export plan/report contracts. The exporter proves copy-only PNG/PCM Matroska cuts, rejects unsupported strict requests, encodes crop/H.264 input when explicitly permitted, and validates every decoded frame, PCM sample, presentation timestamp and copied packet payload before publishing an atomic bundle. It is deliberately limited to the matrix in the export guide. Do not expand safe-copy claims from this one matrix.
 
-Next, evaluate the bounded local caption acquisition and STT path in RC-03. Read the Bantz instructions/source before considering integration and do not adopt a native Whisper backend or extra yt-dlp runtime without resolving the documented dependency choice. Structured analysis evidence, detailed synthesis provenance and speaker correction history remain RC-01 extensions alongside later speech/analysis work.
+The bounded yt-dlp adapter, caption assessment/override and timed local-STT chunk processor are implemented. Bantz was inspected at `e930c91`; its PCM contract is compatible, but its public result discards Whisper segment times. Its working tree was left intact. Do not adopt its native Whisper backend or a Deno runtime until Wixely resolves those documented dependency choices. After approval, add a backward-compatible timed Bantz result/adapter, test existing Bantz consumers, and execute real provider quality/resource fixtures. Structured analysis evidence, synthesis provenance and speaker correction history remain RC-01 extensions alongside later speech/analysis work.
 
 Extend the synthetic fixtures and executable test harness without personal media or downloads. Keep an explicit allow/reject policy so it will work through MCP without an interactive dialog. Build/run instructions and VS Code configurations now exist; keep them aligned with changes.
 
-VS Code has 16 launch options covering the stdio MCP host, every current CLI command including timeline preview, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
+VS Code has 18 launch options covering the stdio MCP host, current CLI commands including acquisition/caption assessment/timeline preview, separate exports with/without encoding, and contract/protocol checks. All use the explicit Debug build task. See the development guide for F5 usage, extension requirements and input defaults. Interactive debugger behavior remains unverified.
 
 ## Local environment observations
 
@@ -51,4 +51,4 @@ None of these choices prevents defining contracts and the deterministic local ex
 
 ## Remaining work
 
-Remaining: interactive image-client acceptance, richer analysis/speech contracts, local STT/speaker/Qwen integration, desktop UI, broader export/media/platform acceptance and later URL/web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Implementation agent: begin RC-03 bounded local caption acquisition and STT evaluation**.
+Remaining: live yt-dlp/Deno and native timed-STT acceptance, interactive image-client acceptance, richer analysis/speech contracts, speaker/Qwen integration, desktop UI, broader export/media/platform acceptance and later hosted web/Docker work. Follow the [MVP milestones](mvp.md) and [work queue](work-queue.md). Recommended next action: **Wixely: approve or reject Deno and native Bantz/Whisper adoption; Implementation agent: complete live RC-03 acceptance after that decision**.
