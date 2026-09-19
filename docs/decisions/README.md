@@ -16,5 +16,6 @@
 | [0012](0012-stable-diarization-boundary.md) | 2026-09-19 | Accepted for bounded CLI/MCP foundation | Stable provider cluster mappings, correction preservation and explicit overlap/unknown assignments |
 | [0013](0013-local-sherpa-diarization.md) | 2026-09-19 | Accepted for bounded Windows MVP | Optional sherpa-onnx runtime behind dedicated CLI and MCP configuration |
 | [0014](0014-cupri-desktop-review.md) | 2026-09-19 | Accepted for initial Windows review slice | CupriFace shell with exact revision-aware FFmpeg frames and persisted speaker undo/redo |
+| [0015](0015-validated-desktop-playback-proxy.md) | 2026-09-19 | Accepted for bounded Windows desktop playback | Revision-keyed VP9/Opus proxy from the validated timeline export |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

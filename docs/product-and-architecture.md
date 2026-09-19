@@ -187,7 +187,7 @@ See [dated source verification](../../PLAN/knowledge/media/video-editing-feasibi
 | Candidate | Proposed use and work required |
 | --- | --- |
 | [Bantz speech packages](../../PLAN/projects/github/bantz/current-work.md) | First choice for local Whisper and model/runtime management. Add an app-neutral timed-segment capability and bounded long-file processing while preserving existing dictation consumers. Avoid taking microphone capture and global input packages for file transcription. |
-| [CupriFace](../../PLAN/projects/github/cupri/README.md#cupriface-relationship) | First desktop UI candidate. Prove seekable preview, synchronised audio, timeline interaction and crop overlays on Windows and Linux before choosing it. Keep playback behind an adapter; do not assume an HTML-like video element supplies media playback. |
+| [CupriFace](../../PLAN/projects/github/cupri/README.md#cupriface-relationship) | Selected for the bounded Windows desktop slice. Exact-frame review and a validated VP9/Opus proxy now prove headless seeking and dummy-device A/V timing; crop interaction, physical-device/window testing and Linux remain. Playback stays behind an adapter. |
 | [DnaX](../../PLAN/projects/github/dnax/README.md) | Evaluate host paths, cache/diagnostics and remote API/MCP hosting. Consider experimental uploads for the later web edition only after large-video validation. A database is unnecessary for the initial portable JSON project. |
 | [MCPSharp ecosystem](../../PLAN/projects/github/mcpsharp/README.md) | Reuse service/CLI/stdio/HTTP conventions; choose a concrete host implementation rather than assuming MCPSharp is one shared library. Evaluate DnaX.RemoteAccess.Mcp for HTTP. |
 | [H264Sharp](../../PLAN/projects/github/h264sharp/README.md) | Optional managed H.264 inspection/thumbnail/reference-analysis aid. Verify supported profiles and performance first; retain FFmpeg for broad codec processing. Do not build the entire editor around an H.264-only capability. |
@@ -212,7 +212,7 @@ See [dated source verification](../../PLAN/knowledge/media/video-editing-feasibi
 - Local repository creation was authorized on 2026-09-18. Wixely: choose hosting/visibility before remote creation; local work can proceed.
 - Wixely: choose semantic/visual inference expectations: an existing local endpoint, another local model backend, or an explicitly enabled remote provider. STT remains local.
 - Agent with Wixely: choose initial input/output codec coverage, performance targets, languages and the acceptable safe-cut adjustment policy from representative videos.
-- Desktop toolkit, playback backend, exact JSON schema and any reusable-library changes remain proposals until the feasibility slice validates them.
+- Broader desktop editing, physical-device playback, exact future JSON schema and any reusable-library changes remain proposals until their feasibility slices validate them.
 
 ## Risks and acceptance gates
 
@@ -233,4 +233,4 @@ See [dated source verification](../../PLAN/knowledge/media/video-editing-feasibi
 4. **Agent:** Add MCP job operations and the desktop preview; prove Windows/Linux and headless parity before promoting to an application release.
 5. **Wixely / Agent:** Resolve open product/dependency choices and remote hosting when needed. The local repository exists; promote the PLAN pointer under its chosen host only after that host is selected. Plan web/Docker against the same contracts.
 
-The initial contract/frame, bounded image-aware export, stdio MCP/job, live RC-03 acquisition/local-STT, provider-neutral RC-04 analysis, cancellable local Sherpa diarization, loopback Qwen fitted-rendering and first CupriFace desktop review slices are implemented; the preceding discovery sequence remains context for the broader product. Recommended next action: **Agent** should add seekable synchronized A/V playback and crop interaction to RC-06 and measure speaker/overlap error when representative fixtures become available, with **Wixely** providing representative multi-speaker and replacement examples. Broader media/platform acceptance remains.
+The initial contract/frame, bounded image-aware export, stdio MCP/job, live RC-03 acquisition/local-STT, provider-neutral RC-04 analysis, cancellable local Sherpa diarization, loopback Qwen fitted-rendering and CupriFace exact-frame/synchronized-proxy review slices are implemented; the preceding discovery sequence remains context for the broader product. Recommended next action: **Agent** should add crop interaction and nonblocking preview preparation to RC-06 and measure speaker/overlap error when representative fixtures become available, with **Wixely** providing representative multi-speaker and replacement examples. Broader media/platform acceptance remains.
