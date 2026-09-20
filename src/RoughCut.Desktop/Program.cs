@@ -12,19 +12,23 @@ try
         case [] or ["help"] or ["--help"]:
             Console.WriteLine("""
                 RoughCut desktop review
-                  review <project.json>
+                  review <project.json> [pre-rendered-review.webm]
                   snapshot <project.json> <new-output.png>
                   probe-playback <project.json> <seconds>
                 """);
             return 0;
-        case ["review", var projectPath]:
+        case ["review", var projectPath, .. var reviewOptions] when reviewOptions.Length <= 1:
             {
                 var session = await DesktopReviewSession.LoadAsync(projectPath);
                 DesktopPlaybackController? playback = null;
                 if (!DesktopPlaybackController.Available)
                     session.PlaybackUnavailable("CupriFace native playback decoders are unavailable");
                 else
+                {
                     playback = new();
+                    if (reviewOptions.FirstOrDefault() is { } reviewProxy)
+                        session.UsePlaybackPreview(reviewProxy);
+                }
                 DesktopHost.Run(new RoughCutReviewApp(session, playback), document =>
                 {
                     if (playback is null) return;

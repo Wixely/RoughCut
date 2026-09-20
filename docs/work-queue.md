@@ -1,5 +1,7 @@
 # Implementation work queue
 
+2026-09-20 representative long-form test: URL acquisition, captions and analysis produced a coherent 17-clip, 13:13 factual timeline from a 21:25 VP9/Opus source. Exact indexing now has a five-minute bounded timeout. The strict exporter rejected the source under its documented 60-second lossless-fixture matrix; extending validated long-form VP9/Opus export is the next product blocker. Owner: Implementation agent.
+
 2026-09-20 publication: public GitHub repository Wixely/RoughCut and MIT licensing accepted in decision 0016. Owner: Implementation agent; verify the remote branch after the initial push, then continue RC-06.
 
 2026-09-20 branding: approved aperture-sawblade logo integrated as transparent window/README PNG and Windows executable ICO. Owner: Implementation agent; next verify live window/taskbar and Explorer appearance.

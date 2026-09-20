@@ -36,6 +36,20 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "RoughCut desktop: review current fact cut",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
+      "args": [
+        "review",
+        "${workspaceFolder}/artifacts/user-tests/k_rrelqu_bk/project-v2.json",
+        "${workspaceFolder}/artifacts/user-tests/k_rrelqu_bk/edited-preview.webm"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
       "name": "RoughCut: inspect video",
       "type": "coreclr",
       "request": "launch",

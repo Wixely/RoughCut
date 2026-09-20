@@ -17,6 +17,12 @@ Run the window from Windows PowerShell:
 dotnet run --project src/RoughCut.Desktop -- review artifacts/demo/project.json
 ```
 
+For a timeline whose strict export is currently unsupported, a known local WebM review render can be supplied explicitly as the third argument. The desktop labels it as a pre-rendered review proxy and does not claim it as a validated RoughCut export:
+
+```powershell
+dotnet run --project src/RoughCut.Desktop -- review artifacts/demo/project.json artifacts/demo/review.webm
+```
+
 The **RoughCut desktop review** VS Code launch prompts for the same project path. A deterministic headless render is available for testing:
 
 ```powershell

@@ -71,7 +71,7 @@ public sealed class MediaReader(string ffmpeg = "ffmpeg", string ffprobe = "ffpr
             ["-v", "error", "-protocol_whitelist", "file,pipe", "-format_whitelist", Containers,
              "-select_streams", "V:0", "-show_streams", "-show_frames", "-show_entries",
              "stream=index,codec_name,width,height,time_base,start_pts,sample_aspect_ratio,color_transfer:stream_tags=rotate:stream_side_data=rotation:frame=best_effort_timestamp,duration,width,height",
-             "-of", "json", "-i", path], cancellationToken: cancellationToken);
+             "-of", "json", "-i", path], timeout: TimeSpan.FromMinutes(5), cancellationToken: cancellationToken);
         using var document = JsonDocument.Parse(result.Output);
         var streams = document.RootElement.GetProperty("streams");
         if (streams.GetArrayLength() != 1) throw new InvalidDataException("A usable video stream is required.");

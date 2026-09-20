@@ -6,6 +6,7 @@ namespace RoughCut.Desktop;
 
 public sealed class DesktopReviewSession
 {
+    private const long MaxReviewProxyBytes = 128L * 1024 * 1024;
     private readonly RoughCutOperations _operations;
     private readonly string _projectName;
     private readonly Stack<ReviewChange> _undo = new();
@@ -78,6 +79,21 @@ public sealed class DesktopReviewSession
     {
         Playback = null;
         PlaybackStatus = message;
+    }
+
+    public void UsePlaybackPreview(string path)
+    {
+        path = Path.GetFullPath(path);
+        if (!File.Exists(path)) throw new FileNotFoundException("Pre-rendered review proxy does not exist.", path);
+        if (!string.Equals(Path.GetExtension(path), ".webm", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Pre-rendered desktop review playback must be a WebM file.");
+        var length = new FileInfo(path).Length;
+        if (length is <= 0 or > MaxReviewProxyBytes)
+            throw new InvalidDataException("Pre-rendered review proxy exceeds its 128 MiB bound or is empty.");
+        var duration = ProjectValidator.MapTimeline(Project).LastOrDefault()?.OutputOut ?? 0;
+        Playback = new(path, "external-review-preview", Project.Revision,
+            duration * Project.TimeBase.Numerator / (double)Project.TimeBase.Denominator, length);
+        PlaybackStatus = $"Pre-rendered review proxy (not validated export) · {length / 1024d / 1024d:0.0} MiB";
     }
 
     public double SelectedTimelineSeconds => Preview is null ? 0 :

@@ -64,8 +64,9 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
         document.OnPointer("data-crop-drag", HandleCropPointer);
         if (session.Preview is null)
-            StartLatest(session.InitializePreviewAsync, seekAfter: true, startPlaybackAfter: playback is not null);
-        else if (playback is not null)
+            StartLatest(session.InitializePreviewAsync, seekAfter: true,
+                startPlaybackAfter: playback is not null && session.Playback is null);
+        else if (playback is not null && session.Playback is null)
             StartPlaybackPreparation();
     }
 
@@ -357,7 +358,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
             <section class="workspace">
               <div class="stage-column">
                 <div class="preview-card">
-                  <div class="preview"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="contain" controls label="Validated project timeline playback"></cupri-video></div>
+                  <div class="preview"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="contain" controls label="Project timeline playback"></cupri-video></div>
                   <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
                 </div>
                 <div class="timeline-card">
