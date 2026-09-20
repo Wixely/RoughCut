@@ -2,9 +2,11 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>roughcut-desktop</AssemblyName>
+    <ApplicationIcon>Assets/roughcut.ico</ApplicationIcon>
     <RestoreAdditionalProjectSources>$(MSBuildThisFileDirectory)..\..\vendor\nuget</RestoreAdditionalProjectSources>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Assets/roughcut.png" LogicalName="RoughCut.Desktop.Icon.png" />
     <ProjectReference Include="../RoughCut.Application/RoughCut.Application.csproj" />
     <PackageReference Include="CupriFace" Version="0.26.1" />
     <PackageReference Include="CupriFace.Media" Version="0.26.1" />

@@ -1,5 +1,11 @@
 # RoughCut
 
+<p align="center">
+  <img src="src/RoughCut.Desktop/Assets/roughcut.png" alt="RoughCut aperture and saw-blade logo" width="160" />
+  <br />
+  <img src="src/RoughCut.Desktop/Assets/roughcut-wordmark-refined.png" alt="RoughCut" width="320" />
+</p>
+
 AI-assisted video editing from a local video or URL and a natural-language prompt. Produce an editable JSON cut, with Windows/Linux desktop interfaces and complete headless MCP workflows; a Docker-hosted web edition follows later.
 
 Requirements added on **2026-09-19**: distinguish speakers and allow voice replacement using Qwen TTS. Provider-neutral diarization import with stable correctable speaker IDs, reversible previews, local Sherpa execution, loopback synthesis, bounded duration fitting and sample-validated replacement export now work through CLI/MCP. The first [desktop review](docs/desktop.md) slice adds exact-frame evidence navigation and revisioned speaker-label undo/redo. See the [speaker/voice guide](docs/speaker-and-voice.md) and RC-09 in the work queue.

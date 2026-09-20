@@ -21,6 +21,17 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         int SourceWidth, int SourceHeight, double Scale);
 
     public override string Title => "RoughCut Review";
+    private static readonly byte[] ApplicationIcon = LoadIcon();
+    public override byte[] Icon => ApplicationIcon;
+
+    private static byte[] LoadIcon()
+    {
+        using var stream = typeof(RoughCutReviewApp).Assembly.GetManifestResourceStream("RoughCut.Desktop.Icon.png")
+            ?? throw new InvalidOperationException("The application icon resource is missing.");
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
     public override int Width => 1280;
     public override int Height => 800;
     public override bool DarkWindowChrome => true;
