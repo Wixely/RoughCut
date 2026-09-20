@@ -1,4 +1,4 @@
-﻿# RoughCut logo
+# RoughCut logo
 
 Approved by Wixely on 2026-09-20: a camera aperture combined with a saw-blade silhouette, with a dark burgundy body and vermilion accent. The README centres the unoutlined emblem above the angular ROUGHCUT wordmark with an intact R and subtle translucent white outline.
 
@@ -10,4 +10,4 @@ Generated using built-in ImageGen. Final emblem prompt: preserve the approved bu
 
 Validation: PNG corner transparency checked, Windows desktop build passed, and the icon was extracted from the built executable. Live shell/window appearance remains an acceptance check.
 
-Owner: Implementation agent. Review when the logo or desktop packaging changes. Next: verify live window/taskbar and Explorer appearance. No separate asset license has been selected.
+Owner: Implementation agent. Review when the logo or desktop packaging changes. Next: verify live window/taskbar and Explorer appearance. Project branding is covered by the repository MIT License.

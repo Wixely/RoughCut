@@ -9,7 +9,7 @@ Adapted from the PLAN discovery note on 2026-09-18. This is the canonical implem
 - Next review: Before MCP dependency selection or export-matrix expansion
 - Source: User requests on 2026-09-18 and 2026-09-19
 - Owner: Wixely (product decisions); Agent (design and implementation)
-- Repository hosting, visibility, and license: Undecided
+- Repository hosting, visibility, and license: Public GitHub `Wixely/RoughCut`, MIT; see decision 0016
 
 ## Intended product
 
@@ -209,7 +209,7 @@ See [dated source verification](../../PLAN/knowledge/media/video-editing-feasibi
 - The 2026-09-19 image requirement extends that proposal with MCP frame retrieval and incoming image assets. RC-10 implements timed still-image insertion as the minimum generated-content workflow with bounded PNG transport; broader overlays/compositing and interactive agent-client acceptance remain to validate.
 - Speaker distinction and Qwen TTS replacement are required product capabilities, planned in RC-09 after the deterministic export slice. Audio mixing needed for replacement does not by itself commit to a general multitrack editing UI. Agent evaluates the backend and fit/separation policies; Wixely resolves material quality, dependency and deployment tradeoffs.
 - Product name: RoughCut, confirmed by Wixely on 2026-09-18. This replaces the initial descriptive working title, "AI-assisted video editor".
-- Local repository creation was authorized on 2026-09-18. Wixely: choose hosting/visibility before remote creation; local work can proceed.
+- Local repository creation was authorized on 2026-09-18. Public GitHub publication was authorized on 2026-09-20; see decision 0016.
 - Wixely: choose semantic/visual inference expectations: an existing local endpoint, another local model backend, or an explicitly enabled remote provider. STT remains local.
 - Agent with Wixely: choose initial input/output codec coverage, performance targets, languages and the acceptable safe-cut adjustment policy from representative videos.
 - Broader desktop editing, physical-device playback, exact future JSON schema and any reusable-library changes remain proposals until their feasibility slices validate them.

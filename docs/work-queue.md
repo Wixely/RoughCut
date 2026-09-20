@@ -1,8 +1,10 @@
 # Implementation work queue
 
+2026-09-20 publication: public GitHub repository Wixely/RoughCut and MIT licensing accepted in decision 0016. Owner: Implementation agent; verify the remote branch after the initial push, then continue RC-06.
+
 2026-09-20 branding: approved aperture-sawblade logo integrated as transparent window/README PNG and Windows executable ICO. Owner: Implementation agent; next verify live window/taskbar and Explorer appearance.
 
-- Updated: 2026-09-19
+- Updated: 2026-09-20
 - Review: Each completed slice or changed dependency decision
 - Status: RC-09 bounded cancellable Windows Sherpa diarization and Qwen rendering verified; representative quality remains
 

@@ -20,7 +20,7 @@ Read the sibling PLAN repository's [global instructions](../PLAN/global/AGENTS.m
 - Read each sibling library's instructions and source before making changes; keep its working tree intact. Record compatible changes and test existing consumers.
 - Browser UI defaults to Blazor. No AOT for server-side Blazor; vendor browser assets with versions and licenses; avoid negative tabindex on non-input elements.
 - Add working VS Code build/debug configuration with the first runnable project. Future service hosts need interactive/Windows Service/systemd operation and Docker for network deployment.
-- Do not select a license, create a remote or publish from this local-setup request. Hosting is undecided. GitHub requires intentional open-source authorization; private GitLab projects require verified `agents` Developer access. Review every outgoing commit and binary before any push, including metadata and identifying information.
+- Public GitHub publication at Wixely/RoughCut is authorized under the MIT License (decision 0016). Future visibility or hosting changes require explicit authorization. Review every outgoing commit and binary before any push, including metadata and identifying information.
 
 ## Handoff discipline
 
