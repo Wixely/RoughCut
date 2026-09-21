@@ -32,7 +32,8 @@ internal static class DesktopTests
         await check("Desktop snapshot renders a revision-aware timeline preview", async () =>
         {
             var source = Path.Combine(root, "export source.mkv");
-            var info = await new MediaReader().InspectAsync(source);
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
             var duration = Math.Min(info.DurationTicks, 4000);
             var projectPath = Path.Combine(root, "desktop-preview-project.json");
             await new ProjectStore().SaveAsync(projectPath, new EditProject
@@ -76,7 +77,8 @@ internal static class DesktopTests
         await check("Desktop trim, split and reorder persist with undo and redo", async () =>
         {
             var source = Path.Combine(root, "export source.mkv");
-            var info = await new MediaReader().InspectAsync(source);
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
             var middle = info.DurationTicks / 2;
             var projectPath = Path.Combine(root, "desktop-timeline-project.json");
             await new ProjectStore().SaveAsync(projectPath, new EditProject

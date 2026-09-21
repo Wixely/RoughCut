@@ -102,6 +102,46 @@ await Check("Invalid versions, ranges, crops and references are rejected", () =>
     foreach (var project in invalid) Assert(ProjectValidator.Validate(project).Length > 0, "Invalid fixture accepted.");
     return Task.CompletedTask;
 });
+await Check("Tool locations resolve from environment, then settings file, then PATH", async () =>
+{
+    var settingsPath = Path.Combine(testRoot, "tools", "tools.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+    var configured = Path.Combine(testRoot, "configured-ffmpeg.exe");
+    await File.WriteAllBytesAsync(configured, [0]);
+    var absentYtDlp = Path.Combine(testRoot, "absent-yt-dlp.exe");
+    static string Json(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal);
+    await File.WriteAllTextAsync(settingsPath, $$"""
+        { "schemaVersion": 1, "ffmpeg": "{{Json(configured)}}",
+          "ytDlp": "{{Json(absentYtDlp)}}", "deno": "{{Json(configured)}}" }
+        """);
+
+    var fromFile = new ToolSettings(settingsPath: settingsPath);
+    Assert(fromFile.Ffmpeg == configured && fromFile.Deno == configured,
+        "A settings file did not supply executable locations.");
+    Assert(fromFile.Ffprobe == "ffprobe", "An unconfigured tool did not fall back to a bare PATH name.");
+    Assert(new ToolSettings(settingsPath: settingsPath).Describe()
+        .Single(item => item.Name == "yt-dlp") is { Source: "settings file", Missing: true },
+        "A configured but absent executable was not reported as missing.");
+    Assert(fromFile.Describe().Single(item => item.Name == "ffprobe") is { Source: "PATH", Missing: false },
+        "A PATH fallback was wrongly reported as a missing configured path.");
+
+    // An environment variable outranks the settings file, and a damaged file leaves PATH intact.
+    Environment.SetEnvironmentVariable("ROUGHCUT_FFMPEG", "environment-ffmpeg");
+    try
+    {
+        Assert(new ToolSettings(settingsPath: settingsPath).Ffmpeg == "environment-ffmpeg",
+            "An environment variable did not take precedence over the settings file.");
+    }
+    finally { Environment.SetEnvironmentVariable("ROUGHCUT_FFMPEG", null); }
+
+    await File.WriteAllTextAsync(settingsPath, "{ not json");
+    var damaged = new ToolSettings(settingsPath: settingsPath);
+    Assert(damaged.Ffmpeg == "ffmpeg" && damaged.Deno is null,
+        "A damaged settings file was not ignored in favour of PATH.");
+    var absent = new ToolSettings(settingsPath: Path.Combine(testRoot, "no-such-tools.json"));
+    Assert(absent.Ffprobe == "ffprobe" && absent.YtDlp == "yt-dlp" && absent.Deno is null,
+        "Absent settings did not fall back to PATH with Deno left to yt-dlp.");
+});
 await Check("Portable paths reject Windows and Unix escape forms", () =>
 {
     foreach (var path in new[] { "../secret", "/secret", "C:/secret", "file://secret", "media\\source.mp4", "media/../secret", "media/name:stream", "media//file" })
@@ -471,8 +511,8 @@ await Check("Loopback Qwen synthesis honors cancellation and timeout", async () 
 
 if (args.Contains("--media", StringComparer.Ordinal))
 {
-    var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
-    var reader = new MediaReader(ffmpeg, Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe");
+    var ffmpeg = ToolSettings.Default.Ffmpeg;
+    var reader = new MediaReader(ffmpeg, ToolSettings.Default.Ffprobe);
     var source = Path.Combine(testRoot, "synthetic clip.mkv");
     await Check("Generate reproducible lossless interframe fixture", async () =>
     {
@@ -515,7 +555,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
     {
         var fake = new TestAcquisitionTool(source);
         var operations = new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg,
-            Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe", "fake-yt-dlp", fake);
+            ToolSettings.Default.Ffprobe, "fake-yt-dlp", fake);
         var result = await operations.CreateProjectFromUrlAsync("https://example.test/watch?v=private-token#fragment", "url-project");
 
         // The subtitle and format policy must stay RoughCut's, not something a caller has to remember.
@@ -541,7 +581,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
         // A source without subtitles still yields a usable project, with the reason reported.
         var withoutCaptions = new TestAcquisitionTool(source) { OmitCaptions = true };
         var bare = await new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg,
-            Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe", "fake-yt-dlp", withoutCaptions)
+            ToolSettings.Default.Ffprobe, "fake-yt-dlp", withoutCaptions)
             .CreateProjectFromUrlAsync("https://example.test/no-subs", "url-project-bare");
         Assert(bare.Captions is null && bare.CaptionIssue is not null && bare.Project.Captions is null &&
             bare.Project.Revision == 1 && ProjectValidator.Validate(bare.Project).Length == 0,

@@ -43,10 +43,10 @@ public sealed class DesktopReviewSession
             ? Path.GetFullPath(configured)
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RoughCut");
 
-    private static RoughCutOperations Operations(string directory) => new(new WorkspaceBoundary(directory),
-        Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg",
-        Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe",
-        Environment.GetEnvironmentVariable("ROUGHCUT_YTDLP") ?? "yt-dlp");
+    public static ToolSettings Tools => ToolSettings.Default;
+
+    private static RoughCutOperations Operations(string directory) =>
+        new(new WorkspaceBoundary(directory), Tools.Ffmpeg, Tools.Ffprobe, Tools.YtDlp);
 
     /// Downloads one URL with its subtitles through the bounded yt-dlp policy, then creates and opens a
     /// project for it. Each acquisition gets its own dated folder under the projects root.
@@ -57,7 +57,7 @@ public sealed class DesktopReviewSession
         var destination = UnusedDirectory(root, DateTime.Now.ToString("yyyy-MM-dd-HHmmss",
             System.Globalization.CultureInfo.InvariantCulture));
         var result = await Operations(root).CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(destination),
-            Environment.GetEnvironmentVariable("ROUGHCUT_DENO"), token: token);
+            Tools.Deno, token: token);
         return await LoadAsync(result.ProjectPath, token);
     }
 
@@ -127,7 +127,7 @@ public sealed class DesktopReviewSession
         PlaybackStatus = "Preparing synchronized playback…";
         try
         {
-            var playback = await new DesktopPlaybackProxyBuilder().PrepareAsync(ProjectPath, token);
+            var playback = await new DesktopPlaybackProxyBuilder(Tools.Ffmpeg, Tools.Ffprobe).PrepareAsync(ProjectPath, token);
             token.ThrowIfCancellationRequested();
             if (Project.Revision != revision)
                 throw new OperationCanceledException("The timeline changed while playback was being prepared.", token);

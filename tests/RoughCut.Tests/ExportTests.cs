@@ -83,8 +83,8 @@ internal static class ExportTests
             return Task.CompletedTask;
         });
         if (!args.Contains("--media", StringComparer.Ordinal)) return;
-        var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
-        var ffprobe = Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe";
+        var ffmpeg = RoughCut.Application.ToolSettings.Default.Ffmpeg;
+        var ffprobe = RoughCut.Application.ToolSettings.Default.Ffprobe;
         var source = Path.Combine(root, "export source.mkv");
         var captionsPath = Path.Combine(root, "captions.srt");
         var projectPath = Path.Combine(root, "export-project.json");

@@ -12,7 +12,7 @@ Run the host directly:
 dotnet run --project src/RoughCut.Mcp -- --workspace artifacts/mcp-workspace
 ```
 
-`ROUGHCUT_WORKSPACE` can supply the root. `ROUGHCUT_FFMPEG` and `ROUGHCUT_FFPROBE` override the external media executables. Standard output is reserved for MCP messages.
+`ROUGHCUT_WORKSPACE` can supply the root. External executables resolve through the shared order described in the [development guide](development.md): environment variables, then a tools settings file, then `PATH`, so yt-dlp, FFmpeg, FFprobe and Deno need not be on `PATH`. Standard output is reserved for MCP messages.
 
 Set `ROUGHCUT_QWEN_ENDPOINT` to an absolute loopback service root to enable live synthesis, for example `http://127.0.0.1:8080/`. `ROUGHCUT_QWEN_API_KEY` is optional and `ROUGHCUT_QWEN_TIMEOUT_SECONDS` defaults to 600. Non-loopback endpoints are rejected so enabling this tool cannot silently disclose text to a remote service.
 

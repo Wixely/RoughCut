@@ -18,9 +18,10 @@ try
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = args });
     builder.Logging.ClearProviders();
     var boundary = new WorkspaceBoundary(workspace);
-    var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
-    var ffprobe = Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe";
-    var ytDlp = Environment.GetEnvironmentVariable("ROUGHCUT_YTDLP") ?? "yt-dlp";
+    var tools = ToolSettings.Default;
+    var ffmpeg = tools.Ffmpeg;
+    var ffprobe = tools.Ffprobe;
+    var ytDlp = tools.YtDlp;
     var speechModel = Environment.GetEnvironmentVariable("ROUGHCUT_STT_MODEL");
     var speechLanguage = Environment.GetEnvironmentVariable("ROUGHCUT_STT_LANGUAGE") ?? "en";
     var speechChunkSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_STT_CHUNK_SECONDS"), out var configuredChunk)

@@ -4,7 +4,25 @@
 - Review: When CLI commands, SDK or media dependencies change
 - Owner: Implementation agent
 
-Use .NET SDK 10.0.300 (latest patch roll-forward in that feature band) and standalone FFmpeg/FFprobe on PATH. URL acquisition additionally needs a standalone yt-dlp executable; `ROUGHCUT_YTDLP` overrides its path. Full current YouTube support also needs a JavaScript runtime: yt-dlp enables Deno by default and finds it on `PATH` or beside `yt-dlp.exe`, so none of this needs configuring when Deno is present; `ROUGHCUT_DENO` or the CLI argument pins a specific binary. Without a runtime, acquisition still works with fewer available formats. Local STT uses the separate `RoughCut.Speech.Cli` with Whisper.net 1.9.1 and a pinned base.en model. Local diarization uses the separate `RoughCut.Diarization.Cli` with sherpa-onnx 1.13.8 and external Pyannote/3D-Speaker ONNX models. The stdio host pins `ModelContextProtocol` 1.4.0. The managed product does not embed Python; the accepted optional Qwen provider runs as a separate loopback WSL/Python service described in the [speaker/voice guide](speaker-and-voice.md). NativeAOT CLI publishing additionally requires the Windows native build toolchain. The desktop host calls two operating-system libraries directly for its file picker — `comdlg32.dll` (`GetOpenFileNameW`, `CommDlgExtendedError`) and `user32.dll` (`GetActiveWindow`) on Windows, and the `zenity` or `kdialog` executable on Linux if one is installed. These are platform components, not redistributed assets; where none is available the launcher hides **Browse for a project…** and keeps file drop and a typed path. Executable/model paths and service endpoints are machine configuration, not project JSON.
+Use .NET SDK 10.0.300 (latest patch roll-forward in that feature band) and standalone FFmpeg/FFprobe. URL acquisition additionally needs a standalone yt-dlp executable. Full current YouTube support also needs a JavaScript runtime: yt-dlp enables Deno by default and finds it on `PATH` or beside `yt-dlp.exe`, so it needs no configuring when Deno is present; without a runtime, acquisition still works with fewer available formats.
+
+### Where RoughCut looks for executables
+
+Executables do not have to be on `PATH`. Every host — CLI, desktop, stdio MCP, speech and diarization — resolves each one the same way, in order: an explicit command argument, then an environment variable (`ROUGHCUT_FFMPEG`, `ROUGHCUT_FFPROBE`, `ROUGHCUT_YTDLP`, `ROUGHCUT_DENO`), then a tools settings file, and otherwise a bare name left to `PATH`. Run `dotnet run --project src/RoughCut.Cli -- tools` to print what resolves, from where, and whether a configured path is actually present.
+
+The settings file is read from `ROUGHCUT_TOOLS` if set, otherwise `roughcut.tools.json` beside the running executable, otherwise `%LOCALAPPDATA%\RoughCut\tools.json`. Every entry is optional and any missing one falls through to `PATH`; a damaged or unreadable file is ignored rather than allowed to stop a host starting. It is machine configuration and never belongs in a project or the repository.
+
+```json
+{
+  "schemaVersion": 1,
+  "ffmpeg": "C:/tools/ffmpeg/bin/ffmpeg.exe",
+  "ffprobe": "C:/tools/ffmpeg/bin/ffprobe.exe",
+  "ytDlp": "C:/tools/yt-dlp.exe",
+  "deno": "C:/tools/deno.exe"
+}
+```
+
+VS Code launches inherit this automatically, so no launch profile carries a machine path. Local STT uses the separate `RoughCut.Speech.Cli` with Whisper.net 1.9.1 and a pinned base.en model. Local diarization uses the separate `RoughCut.Diarization.Cli` with sherpa-onnx 1.13.8 and external Pyannote/3D-Speaker ONNX models. The stdio host pins `ModelContextProtocol` 1.4.0. The managed product does not embed Python; the accepted optional Qwen provider runs as a separate loopback WSL/Python service described in the [speaker/voice guide](speaker-and-voice.md). NativeAOT CLI publishing additionally requires the Windows native build toolchain. The desktop host calls two operating-system libraries directly for its file picker — `comdlg32.dll` (`GetOpenFileNameW`, `CommDlgExtendedError`) and `user32.dll` (`GetActiveWindow`) on Windows, and the `zenity` or `kdialog` executable on Linux if one is installed. These are platform components, not redistributed assets; where none is available the launcher hides **Browse for a project…** and keeps file drop and a typed path. Executable/model paths and service endpoints are machine configuration, not project JSON.
 
 From the repository root in Windows PowerShell 5.1:
 

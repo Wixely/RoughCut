@@ -87,7 +87,7 @@ static async Task<int> ProbePlaybackAsync(string projectPath, string secondsText
     if (!NativeDecoders.Available)
         throw new InvalidOperationException("CupriFace native playback decoders are unavailable.");
 
-    var proxy = await new DesktopPlaybackProxyBuilder().PrepareAsync(projectPath);
+    var proxy = await new DesktopPlaybackProxyBuilder(DesktopReviewSession.Tools.Ffmpeg, DesktopReviewSession.Tools.Ffprobe).PrepareAsync(projectPath);
     Environment.SetEnvironmentVariable("SDL_AUDIODRIVER", "dummy");
     var sink = SdlAudioSink.TryCreate() ?? throw new InvalidOperationException("SDL audio sink is unavailable.");
     using var player = (WebmPlayer)new WebmVideoBackend(new NativeDecoders(), sink).Open(new VideoSource(proxy.Path));

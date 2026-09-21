@@ -14,7 +14,9 @@
 
 2026-09-20 timeline editing: the desktop review host now trims, splits and reorders clips through one revision-checked edit each, reversed exactly by the existing undo/redo stack. A new `set-range` edit action makes an interactive trim reversible and is available to CLI and MCP callers; see [decision 0017](decisions/0017-reversible-timeline-editing.md) and the [timeline-editing evidence](evidence/2026-09-20-desktop-timeline-editing.md). Owner: Implementation agent; next run the window on a physical device.
 
-2026-09-20 environment: this machine can no longer publish the NativeAOT CLI — the MSVC platform linker is absent — and the FFmpeg first found on `PATH` is a 2018 build that fails every media check. A separately installed current build was used for verification. Owner: Wixely; restore the C++ build tools and the `PATH` order, or record these as the accepted local prerequisites.
+2026-09-21 tool configuration: executables no longer have to be on `PATH`. Every host resolves FFmpeg, FFprobe, yt-dlp and Deno through one shared order — explicit argument, environment variable, tools settings file, then `PATH` — and `roughcut tools` prints what resolves and whether it exists. The full suite passes with a stale 2018 FFmpeg still first on `PATH`, resolving instead through the settings file. See the [development guide](development.md). Owner: Implementation agent.
+
+2026-09-20 environment: this machine can no longer publish the NativeAOT CLI — the MSVC platform linker is absent. The FFmpeg first found on `PATH` is also a 2018 build that fails every media check; that is now worked around by tool configuration rather than requiring a `PATH` change. Owner: Wixely; restore the C++ build tools, and tidy the `PATH` order when convenient.
 
 The [MVP milestones](mvp.md) define the current execution order. URL acquisition, standalone semantic-model selection and web hosting follow the local agent-assisted MVP; local speech/voice and MCP image workflows remain in scope.
 

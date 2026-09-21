@@ -36,8 +36,7 @@ try
                     : LocalSpeechProcessor.DefaultChunkSeconds;
                 using var transcriber = new WhisperLocalSpeechTranscriber(Path.GetFullPath(modelPath), language);
                 var operations = new RoughCutOperations(workspace,
-                    Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg",
-                    Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe");
+                    ToolSettings.Default.Ffmpeg, ToolSettings.Default.Ffprobe);
                 var project = await operations.TranscribeLocalAsync(Path.GetFileName(fullProjectPath), assetId,
                     long.Parse(expectedRevision, CultureInfo.InvariantCulture), transcriber, chunkSeconds, token);
                 Console.WriteLine(JsonSerializer.Serialize(project, ProjectJson.Default.EditProject));

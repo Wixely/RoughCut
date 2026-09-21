@@ -10,9 +10,10 @@ using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
 var token = cancellation.Token;
 var store = new ProjectStore();
-var ffmpeg = Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg";
-var ffprobe = Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe";
-var ytDlp = Environment.GetEnvironmentVariable("ROUGHCUT_YTDLP") ?? "yt-dlp";
+var tools = ToolSettings.Default;
+var ffmpeg = tools.Ffmpeg;
+var ffprobe = tools.Ffprobe;
+var ytDlp = tools.YtDlp;
 var media = new MediaReader(ffmpeg, ffprobe);
 try
 {
@@ -21,6 +22,7 @@ try
         case [] or ["help"] or ["--help"]:
             Console.WriteLine("""
                 RoughCut development CLI
+                  tools
                   validate <project.json>
                   map <project.json>
                   save <candidate.json> <project.json> <expected-revision>
@@ -48,9 +50,19 @@ try
                 Frame requests use source-relative presentation time. JSON metadata goes to stdout.
                 Export is bounded to the documented Matroska video/PCM fixture matrix.
                 Local speech inference requires a separately configured compatible runtime.
-                Set ROUGHCUT_FFMPEG / ROUGHCUT_FFPROBE / ROUGHCUT_YTDLP to override executable locations.
+                Executable locations come from ROUGHCUT_FFMPEG / ROUGHCUT_FFPROBE / ROUGHCUT_YTDLP / ROUGHCUT_DENO,
+                then a tools settings file, then PATH. Run `tools` to see what resolves.
                 """);
             break;
+        case ["tools"]:
+            {
+                Console.WriteLine($"settings file: {tools.SettingsPath}" +
+                    (File.Exists(tools.SettingsPath) ? "" : " (absent)"));
+                foreach (var resolved in tools.Describe())
+                    Console.WriteLine($"  {resolved.Name,-8} {resolved.Value}  [{resolved.Source}]" +
+                        (resolved.Missing ? "  MISSING" : ""));
+                break;
+            }
         case ["validate", var path]:
             await store.LoadAsync(path, token);
             Console.WriteLine("{\"valid\":true}");
@@ -79,7 +91,7 @@ try
                 var fullDestination = Path.GetFullPath(destination);
                 var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
                 var result = await new YtDlpAcquirer(boundary, ytDlp).AcquireAsync(sourceUrl,
-                    Path.GetFileName(fullDestination), acquisitionOptions.FirstOrDefault(), token);
+                    Path.GetFileName(fullDestination), acquisitionOptions.FirstOrDefault() ?? tools.Deno, token);
                 Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.AcquisitionResult));
                 break;
             }
@@ -261,7 +273,7 @@ try
                 var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
                 var operations = new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp);
                 var result = await operations.CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(fullDestination),
-                    urlOptions.FirstOrDefault(), token: token);
+                    urlOptions.FirstOrDefault() ?? tools.Deno, token: token);
                 Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.UrlProjectResult));
                 break;
             }

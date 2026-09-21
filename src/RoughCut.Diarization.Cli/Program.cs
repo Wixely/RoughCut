@@ -25,8 +25,7 @@ try
                 var fullProjectPath = Path.GetFullPath(projectPath);
                 var count = options.Length == 0 ? 0 : int.Parse(options[0], CultureInfo.InvariantCulture);
                 var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(fullProjectPath)!),
-                    Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg",
-                    Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe");
+                    ToolSettings.Default.Ffmpeg, ToolSettings.Default.Ffprobe);
                 var worker = System.Reflection.Assembly.GetEntryAssembly()?.Location
                     ?? throw new InvalidOperationException("Diarization worker location is unavailable.");
                 var diarizer = new IsolatedSherpaSpeakerDiarizer(worker, segmentationModel, embeddingModel, count);
@@ -42,7 +41,7 @@ try
                 var diarizer = new SherpaSpeakerDiarizer(segmentationModel, embeddingModel,
                     int.Parse(speakerCount, CultureInfo.InvariantCulture),
                     float.Parse(threshold, CultureInfo.InvariantCulture),
-                    Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg");
+                    ToolSettings.Default.Ffmpeg);
                 var submission = await diarizer.DiarizeAsync(project, assetId, Path.GetFullPath(sourcePath), cancellation.Token);
                 Console.WriteLine(JsonSerializer.Serialize(submission, ProjectJson.Default.DiarizationSubmission));
                 break;
