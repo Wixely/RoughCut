@@ -8,6 +8,10 @@ using SkiaSharp;
 // A window that vanishes tells nobody anything. Record what actually happened, wherever it happened.
 AppDomain.CurrentDomain.UnhandledException += (_, e) => ReportCrash(e.ExceptionObject as Exception, "unhandled");
 TaskScheduler.UnobservedTaskException += (_, e) => { ReportCrash(e.Exception, "background"); e.SetObserved(); };
+// Some failures are caught and turned into a bare message by the shell before they reach the handlers
+// above. ROUGHCUT_TRACE=1 records every exception as it is thrown, which is what a stack needs.
+if (Environment.GetEnvironmentVariable("ROUGHCUT_TRACE") == "1")
+    AppDomain.CurrentDomain.FirstChanceException += (_, e) => ReportCrash(e.Exception, "first-chance");
 
 try
 {
@@ -98,11 +102,20 @@ static int RunWindow(DesktopReviewSession? session, string? reviewProxy)
     }
     var recent = new RecentProjects();
     if (session is not null) recent.Record(session.ProjectPath, session.Project.ProjectId);
-    DesktopHost.Run(new RoughCutReviewApp(session, playback, recent), document =>
+    try
     {
-        if (playback is null) return;
-        document.UseVideo(playback);
-    });
+        DesktopHost.Run(new RoughCutReviewApp(session, playback, recent), document =>
+        {
+            if (playback is null) return;
+            document.UseVideo(playback);
+        });
+    }
+    catch (Exception exception)
+    {
+        // The window loop is where a failure is least visible, so record it with its stack before leaving.
+        ReportCrash(exception, "window");
+        return 2;
+    }
     return 0;
 }
 

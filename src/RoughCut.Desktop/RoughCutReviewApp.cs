@@ -101,11 +101,36 @@ public sealed class RoughCutReviewApp : CupriApp
     }
 
     private int _clipIndex;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _pending = new();
+
+    /// Refresh rebuilds the document, so changing the model or refreshing from a work thread races the
+    /// renderer and can leave it reading a half-built document ("Document has no &lt;body&gt;"). Background
+    /// work queues its view changes here and Present applies them on the thread that renders.
+    private void Post(Action change)
+    {
+        _pending.Enqueue(change);
+        // Headless callers drive Present themselves; a live window pumps on its next frame.
+    }
+
+    /// Applies queued view changes. Public so headless tests and renders can pump without a window.
+    public void PumpPendingChanges()
+    {
+        while (_pending.TryDequeue(out var change))
+        {
+            try { change(); }
+            catch (Exception exception)
+            {
+                _model.Status = exception.Message;
+                _document?.Refresh();
+            }
+        }
+    }
 
     /// Called each presented frame. While the preview copy plays, keep it inside the current clip and jump
     /// at boundaries, which is what makes cuts and reordering visible without rendering a new video.
     public override PresentInfo Present(float width, float height)
     {
+        PumpPendingChanges();
         // Read the session once: it can be cleared from another thread, and a throw here would end the
         // process on the render path rather than surface anywhere a person could read it.
         var session = _session;
@@ -169,14 +194,17 @@ public sealed class RoughCutReviewApp : CupriApp
                 var chosen = create
                     ? NativeFileDialog.OpenFile("Choose a video for a new RoughCut project", VideoFilter, start, owner)
                     : NativeFileDialog.OpenFile("Open a RoughCut project", ProjectFilter, start, owner);
-                if (chosen is null) ShowLauncher();
-                else if (create) CreateProject(chosen);
-                else OpenProject(chosen);
+                Post(() =>
+                {
+                    if (chosen is null) ShowLauncher();
+                    else if (create) CreateProject(chosen);
+                    else OpenProject(chosen);
+                });
             }
             catch (Exception exception) when (exception is InvalidOperationException or
                 IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
             {
-                ShowLauncher(exception.Message);
+                Post(() => ShowLauncher(exception.Message));
             }
         });
     }
@@ -235,7 +263,7 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.OpenMessage = progress;
         _model.Status = progress;
         _document?.Refresh();
-        if (_work.StartCommand(action, exception =>
+        if (_work.StartCommand(action, exception => Post(() =>
         {
             if (exception is null)
             {
@@ -254,7 +282,7 @@ public sealed class RoughCutReviewApp : CupriApp
                 _model.Status = described;
                 _document?.Refresh();
             }
-        })) return;
+        }))) return;
         _model.OpenMessage = busy;
         _document?.Refresh();
     }
@@ -302,11 +330,11 @@ public sealed class RoughCutReviewApp : CupriApp
     {
         _model.Status = "Loading frame…";
         _document?.Refresh();
-        if (!_work.StartLatest(action, exception =>
+        if (!_work.StartLatest(action, exception => Post(() =>
         {
             Complete(exception, seekAfter);
             if (exception is null && startPlaybackAfter) StartPlaybackPreparation();
-        }))
+        })))
         {
             _model.Status = "Finish the current edit before selecting another frame.";
             _document?.Refresh();
@@ -318,11 +346,11 @@ public sealed class RoughCutReviewApp : CupriApp
         if (rebuildPlayback) CancelPlaybackPreparation();
         _model.Status = "Saving revision…";
         _document?.Refresh();
-        if (!_work.StartCommand(action, exception =>
+        if (!_work.StartCommand(action, exception => Post(() =>
         {
             Complete(exception, seekAfter);
             if (exception is null && rebuildPlayback && playback is not null) StartPlaybackPreparation();
-        }))
+        })))
         {
             _model.Status = "An edit is already being saved.";
             _document?.Refresh();
@@ -373,8 +401,11 @@ public sealed class RoughCutReviewApp : CupriApp
             }
             cancellation.Dispose();
             if (canceled || !current) return;
-            if (failure is not null) Session.PlaybackUnavailable(failure.Message);
-            Complete(failure, seekAfter: false);
+            Post(() =>
+            {
+                if (failure is not null) _session?.PlaybackUnavailable(failure.Message);
+                Complete(failure, seekAfter: false);
+            });
         });
     }
 
