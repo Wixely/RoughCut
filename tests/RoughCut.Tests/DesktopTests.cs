@@ -283,6 +283,39 @@ internal static class DesktopTests
                 "The file dialog left the process working directory changed.");
         });
 
+        await check("Review panel controls stay inside their panel", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            using var dump = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+
+            // CupriFace text fields keep an intrinsic width and overflow a narrower cell rather than shrink,
+            // which silently pushed crop fields and the rename button outside the panel until measured.
+            var panel = FindNodeCore(dump.RootElement.GetProperty("tree"), "review-panel");
+            Assert(panel.ValueKind != System.Text.Json.JsonValueKind.Undefined, "The review panel was not rendered.");
+            var bounds = Box(panel);
+            var overflowing = new List<string>();
+            Inspect(panel);
+            void Inspect(System.Text.Json.JsonElement node)
+            {
+                if (node.TryGetProperty("box", out _))
+                {
+                    var box = Box(node);
+                    if (box[0] < bounds[0] - 0.5f || box[0] + box[2] > bounds[0] + bounds[2] + 0.5f)
+                        overflowing.Add($"{Describe(node)} x={box[0]:0.#} right={box[0] + box[2]:0.#}");
+                }
+                if (node.TryGetProperty("children", out var children))
+                    foreach (var child in children.EnumerateArray()) Inspect(child);
+            }
+            Assert(overflowing.Count == 0,
+                $"Review panel content escaped its bounds ({bounds[0]:0.#}–{bounds[0] + bounds[2]:0.#}): " +
+                string.Join("; ", overflowing.Take(6)));
+        });
+
         await check("Desktop background work stays responsive and supersedes stale selections", async () =>
         {
             var coordinator = new RoughCut.Desktop.DesktopWorkCoordinator();
@@ -389,6 +422,25 @@ internal static class DesktopTests
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static extern bool PostMessageW(nint window, uint message, nint wParam, nint lParam);
+
+    private static float[] Box(System.Text.Json.JsonElement node) =>
+        node.GetProperty("box").EnumerateArray().Select(item => item.GetSingle()).ToArray();
+
+    private static string Describe(System.Text.Json.JsonElement node) =>
+        node.TryGetProperty("class", out var css) && css.GetString() is { Length: > 0 } name ? "." + name
+            : node.TryGetProperty("tag", out var tag) ? tag.GetString() ?? "?" : "?";
+
+    private static System.Text.Json.JsonElement FindNodeCore(System.Text.Json.JsonElement node, string cssClass)
+    {
+        if (node.TryGetProperty("class", out var css) && css.GetString() == cssClass) return node;
+        if (node.TryGetProperty("children", out var children))
+            foreach (var child in children.EnumerateArray())
+            {
+                var found = FindNodeCore(child, cssClass);
+                if (found.ValueKind != System.Text.Json.JsonValueKind.Undefined) return found;
+            }
+        return default;
+    }
 
     private static float[] FindBox(System.Text.Json.JsonElement node, string cssClass)
     {

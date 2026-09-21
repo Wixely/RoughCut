@@ -645,12 +645,14 @@ public sealed class RoughCutReviewApp : CupriApp
         .clip:hover,.clip.selected { background:#263249; }
         .clip span,.clip small { color:var(--muted); font-size:10px; }
         .evidence-card { max-height:150px; overflow:hidden; padding-bottom:8px; } .empty { color:var(--muted); font-size:11px; padding:0 14px 8px; }
-        button { color:inherit; font:inherit; } .evidence-row,.speaker-row,.speech-row { width:100%; border:0; text-align:left; cursor:pointer; }
+        /* Rows are full width inside padded scroll areas, so they must include their own padding. */
+        button { color:inherit; font:inherit; } .evidence-row,.speaker-row,.speech-row { width:100%; box-sizing:border-box; border:0; text-align:left; cursor:pointer; }
         .evidence-row { display:flex; gap:8px; padding:7px 14px; background:transparent; } .decision { color:var(--accent); font-weight:bold; text-transform:uppercase; font-size:10px; }
         .review-panel { min-height:0; display:flex; flex-direction:column; overflow:hidden; }
         .clip-editor.hidden { display:none; }
         .clip-summary { color:var(--muted); font-size:10px; padding:2px 12px 5px; }
-        .clip-controls { display:grid; grid-template-columns:200px 200px 1fr; gap:8px; align-items:end; padding:0 12px 10px; }
+        .clip-controls { display:grid; grid-template-columns:150px 150px minmax(0,1fr); gap:10px; align-items:end; padding:0 14px 12px; }
+        .clip-controls cupri-textfield { box-sizing:border-box; min-width:0; width:150px; }
         .clip-controls label span { display:block; color:var(--muted); font-size:9px; margin-bottom:2px; }
         .clip-actions { display:flex; gap:6px; justify-content:flex-end; } .clip-actions .hidden { display:none; }
         .crop-editor { padding-bottom:10px; border-bottom:1px solid var(--line); } .crop-editor.hidden { display:none; }
@@ -659,12 +661,16 @@ public sealed class RoughCutReviewApp : CupriApp
         .crop-handle { position:absolute; width:12px; height:12px; border:2px solid #fff; border-radius:50%; background:var(--accent); box-sizing:border-box; }
         .crop-handle.nw { left:-7px; top:-7px; cursor:nwse-resize; } .crop-handle.ne { right:-7px; top:-7px; cursor:nesw-resize; }
         .crop-handle.sw { left:-7px; bottom:-7px; cursor:nesw-resize; } .crop-handle.se { right:-7px; bottom:-7px; cursor:nwse-resize; }
-        .crop-fields { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; padding:0 12px; } .crop-fields label span { display:block; color:var(--muted); font-size:9px; margin-bottom:2px; }
-        .crop-actions { display:flex; justify-content:flex-end; gap:6px; padding:8px 12px 0; }
+        /* Text fields never render narrower than about 90px, so two per row is the most this panel fits. */
+        .crop-fields { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:6px 10px; padding:0 14px; }
+        /* The component sizes content-box and will not shrink below its intrinsic width on its own. */
+        .crop-fields cupri-textfield { box-sizing:border-box; min-width:0; width:165px; } .crop-fields label span { display:block; color:var(--muted); font-size:9px; margin-bottom:2px; }
+        .crop-actions { display:flex; justify-content:flex-end; gap:6px; padding:10px 14px 0; }
         .speaker-row { display:grid; grid-template-columns:18px 1fr auto; gap:8px; align-items:center; padding:8px 14px; background:transparent; border-left:3px solid transparent; }
         .speaker-row:hover,.speaker-row.selected,.speech-row:hover,.speech-row.selected { background:#202a3c; } .speaker-row.selected { border-left-color:var(--accent); }
         .speaker-row small { color:var(--muted); font-size:9px; } .avatar { color:var(--accent); }
-        .rename { display:grid; grid-template-columns:1fr auto; gap:8px; padding:10px 14px 14px; border-bottom:1px solid var(--line); }
+        .rename { display:grid; gap:6px; justify-items:end; padding:10px 14px 14px; border-bottom:1px solid var(--line); }
+        .rename cupri-textfield { box-sizing:border-box; min-width:0; width:350px; }
         .transcript-title { padding-top:14px; } .truncation { color:var(--accent); font-size:10px; padding:0 14px 6px; }
         .transcript { flex:1; min-height:0; overflow-y:auto; padding:0 7px 10px; }
         .speech-row { padding:10px; margin-bottom:5px; border-radius:7px; background:transparent; }
