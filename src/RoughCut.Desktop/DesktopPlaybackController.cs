@@ -24,4 +24,6 @@ public sealed class DesktopPlaybackController : IVideoBackend
     {
         if (_player is not null) _player.Position = Math.Clamp(seconds, 0, _player.Duration);
     }
+
+    public void Pause() => _player?.Pause();
 }

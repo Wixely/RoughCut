@@ -84,6 +84,7 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".undo", _ => StartCommand(() => UndoRedoAsync(redo: false), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".redo", _ => StartCommand(() => UndoRedoAsync(redo: true), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".exact-preview", _ => StartExactPreview());
         document.OnPointer("data-crop-drag", HandleCropPointer);
         document.OnClick(".recent-open", e => OpenProject(Required(e, "data-path")));
         document.OnClick(".open-path", _ => OpenOrCreate(_model.OpenPath));
@@ -97,6 +98,23 @@ public sealed class RoughCutReviewApp : CupriApp
         });
         if (_session is null) ShowLauncher();
         else StartReview();
+    }
+
+    private int _clipIndex;
+
+    /// Called each presented frame. While the preview copy plays, keep it inside the current clip and jump
+    /// at boundaries, which is what makes cuts and reordering visible without rendering a new video.
+    public override PresentInfo Present(float width, float height)
+    {
+        if (_session is not null && playback is { Playing: true } && Session.Playback is null &&
+            Session.Mapping is { Length: > 0 } mapping)
+        {
+            var step = TimelinePlayback.Advance(mapping, Session.Project.TimeBase, _clipIndex, playback.PositionSeconds);
+            _clipIndex = step.ClipIndex;
+            if (step.Ended) playback.Pause();
+            else if (step.SeekSeconds is { } seek) playback.Seek(seek);
+        }
+        return base.Present(width, height);
     }
 
     private void StartReview()
@@ -295,7 +313,13 @@ public sealed class RoughCutReviewApp : CupriApp
         }
     }
 
-    private void StartPlaybackPreparation()
+    /// Builds the validated export-backed render on request. This is the only place the desktop renders
+    /// video, and it is explicit rather than a side effect of editing.
+    private void StartExactPreview() => StartPlaybackPreparation(exact: true);
+
+    private void StartPlaybackPreparation() => StartPlaybackPreparation(exact: false);
+
+    private void StartPlaybackPreparation(bool exact)
     {
         CancellationTokenSource cancellation;
         long generation;
@@ -305,7 +329,7 @@ public sealed class RoughCutReviewApp : CupriApp
             cancellation = _playbackCancellation = new();
             generation = ++_playbackGeneration;
         }
-        _model.Status = "Preparing playback in the background…";
+        _model.Status = exact ? "Rendering the exact validated timeline…" : "Preparing playback in the background…";
         _document?.Refresh();
         _ = Task.Run(async () =>
         {
@@ -316,7 +340,8 @@ public sealed class RoughCutReviewApp : CupriApp
             {
                 await _playbackGate.WaitAsync(cancellation.Token);
                 entered = true;
-                await Session.PreparePlaybackAsync(cancellation.Token);
+                if (exact) await Session.PrepareExactPlaybackAsync(cancellation.Token);
+                else await Session.PreparePlaybackAsync(cancellation.Token);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { canceled = true; }
             catch (Exception exception) { failure = exception; }
@@ -352,7 +377,12 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.Status = exception is null ? "Ready" : exception.Message;
         Rebuild(preserveStatus: true);
         _document?.Refresh();
-        if (exception is null && seekAfter && _session is not null) playback?.Seek(Session.SelectedTimelineSeconds);
+        if (exception is null && seekAfter && _session is not null && playback is not null)
+        {
+            var step = Session.SelectedPlaybackStep();
+            _clipIndex = step.ClipIndex;
+            if (step.SeekSeconds is { } seconds) playback.Seek(seconds);
+        }
     }
 
     private bool HandleCropPointer(MultiPointerEvent pointer)
@@ -457,7 +487,14 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.Revision = project.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _model.PreviewDataUri = Session.Preview is null ? "" :
             "data:image/png;base64," + Convert.ToBase64String(Session.Preview.Png);
-        _model.PlaybackUri = Session.Playback is null ? "" : new Uri(Session.Playback.Path).AbsoluteUri;
+        // The exact render wins when one has been asked for; otherwise the player shows the source copy.
+        var playbackPath = Session.Playback?.Path ?? Session.PlaybackCopy?.Path;
+        _model.PlaybackUri = playbackPath is null ? "" : new Uri(playbackPath).AbsoluteUri;
+        _model.ExactClass = Session.Playback is null ? "" : "hidden";
+        // The exact still already shows the true crop. Scaling the player to match would distort it, because
+        // the preview box cannot take the crop's aspect ratio in this layout engine; see the desktop guide.
+        _model.PlaybackCropStyle = "width:100%;height:100%";
+        _model.PlaybackFit = "contain";
         _model.PlaybackStatus = Session.PlaybackStatus;
         _model.SourcePreviewDataUri = Session.SourcePreview is null ? "" :
             "data:image/png;base64," + Convert.ToBase64String(Session.SourcePreview.Png);
@@ -575,7 +612,8 @@ public sealed class RoughCutReviewApp : CupriApp
             <section class="workspace {{WorkspaceClass}}">
               <div class="stage-column">
                 <div class="preview-card">
-                  <div class="preview"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="contain" controls label="Project timeline playback"></cupri-video></div>
+                  <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" controls label="Project timeline playback"></cupri-video></div></div>
+                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button></div>
                   <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
                 </div>
                 <div class="timeline-card">
@@ -637,7 +675,10 @@ public sealed class RoughCutReviewApp : CupriApp
         .preview-card,.timeline-card,.evidence-card,.review-panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
         .preview-card { min-height:350px; padding:12px; display:flex; flex-direction:column; }
         .preview { flex:1; min-height:300px; display:flex; align-items:center; justify-content:center; background:#05070b; border-radius:8px; overflow:hidden; }
+        .preview { position:relative; }
+        .preview-crop { position:absolute; }
         .preview cupri-video { width:100%; height:100%; }
+        .preview-actions { display:flex; justify-content:flex-end; padding-top:8px; } .preview-actions .hidden { display:none; }
         .preview-meta { padding:10px 4px 0; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; } .preview-meta strong { color:var(--text); }
         .section-title { padding:12px 14px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px; font-size:11px; font-weight:bold; }
         .timeline { display:flex; gap:6px; padding:0 12px 12px; overflow:hidden; }
@@ -687,6 +728,9 @@ public sealed partial class ReviewModel
     public string Revision { get; set; } = "";
     public string PreviewDataUri { get; set; } = "";
     public string PlaybackUri { get; set; } = "";
+    public string PlaybackCropStyle { get; set; } = "width:100%;height:100%";
+    public string PlaybackFit { get; set; } = "contain";
+    public string ExactClass { get; set; } = "";
     public string PlaybackStatus { get; set; } = "";
     public string SourcePreviewDataUri { get; set; } = "";
     public string Selection { get; set; } = "";

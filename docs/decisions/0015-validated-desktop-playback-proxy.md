@@ -1,7 +1,7 @@
 # 0015: Play a validated revision-keyed WebM proxy on desktop
 
 - Date: 2026-09-19
-- Status: Accepted for bounded Windows desktop playback
+- Status: Accepted for bounded Windows desktop playback; its playback mechanism is superseded by [0019](0019-approximated-preview-playback.md)
 - Review: Export matrix expansion, proxy format change, physical-device acceptance or Linux acceptance
 
 ## Context

@@ -113,18 +113,65 @@ public sealed class DesktopReviewSession
             await SelectSourceAsync(mapping.AssetId, mapping.SourceIn, "Timeline start", token);
     }
 
+    /// The source copy the player shows. Editing never rebuilds it, because the source does not change.
+    public SourceProxy? PlaybackCopy { get; private set; }
+
+    /// Clips in output order, for approximating cuts and reordering over that one copy.
+    public TimelineMapping[] Mapping { get; private set; } = [];
+
+    public bool CanApproximate => TimelinePlayback.CanApproximate(Project);
+
+    /// Prepares the single preview copy of the source. No video is rendered for an edit: cuts, ordering and
+    /// crop are approximated over this copy, and only export produces a validated artifact.
     public async Task PreparePlaybackAsync(CancellationToken token = default)
     {
-        // An explicitly supplied render is this session's playback: never replace it with a build that
-        // would fail for the very source it was supplied for.
+        // An explicitly supplied render is this session's playback: never replace it.
         if (_suppliedPreview is not null)
         {
             RestoreSuppliedPreview();
             return;
         }
+        RefreshMapping();
+        if (!CanApproximate)
+        {
+            PlaybackCopy = null;
+            PlaybackStatus = "Preview needs a timeline built from exactly one video source.";
+            throw new DesktopPlaybackUnavailableException(PlaybackStatus);
+        }
+        var assetId = Project.Timeline[0].AssetId;
+        if (PlaybackCopy?.SourceSha256 == Project.Assets.Single(item => item.Id == assetId).Sha256)
+        {
+            PlaybackStatus = PreviewStatus();
+            return;
+        }
+        PlaybackStatus = "Preparing a preview copy of the source…";
+        try
+        {
+            var preview = await new SourceProxyBuilder(Tools.Ffmpeg, Tools.Ffprobe)
+                .PrepareAsync(ProjectPath, Project, assetId, token);
+            token.ThrowIfCancellationRequested();
+            PlaybackCopy = preview;
+            PlaybackStatus = PreviewStatus();
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
+            InvalidOperationException or KeyNotFoundException or ProjectValidationException or
+            MediaToolException or DesktopPlaybackUnavailableException)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                PlaybackCopy = null;
+                PlaybackStatus = exception.Message;
+            }
+            throw;
+        }
+    }
+
+    /// Builds the validated export-backed proxy on request, to confirm exactly what export would produce.
+    public async Task PrepareExactPlaybackAsync(CancellationToken token = default)
+    {
         var revision = Project.Revision;
         Playback = null;
-        PlaybackStatus = "Preparing synchronized playback…";
+        PlaybackStatus = "Rendering the exact validated timeline…";
         try
         {
             var playback = await new DesktopPlaybackProxyBuilder(Tools.Ffmpeg, Tools.Ffprobe).PrepareAsync(ProjectPath, token);
@@ -132,7 +179,7 @@ public sealed class DesktopReviewSession
             if (Project.Revision != revision)
                 throw new OperationCanceledException("The timeline changed while playback was being prepared.", token);
             Playback = playback;
-            PlaybackStatus = $"Synchronized WebM proxy · {playback.Length / 1024d / 1024d:0.0} MiB";
+            PlaybackStatus = $"Exact validated timeline · {playback.Length / 1024d / 1024d:0.0} MiB";
         }
         catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
             InvalidOperationException or KeyNotFoundException or ProjectValidationException or RevisionConflictException or
@@ -142,6 +189,12 @@ public sealed class DesktopReviewSession
             throw;
         }
     }
+
+    private void RefreshMapping() =>
+        Mapping = ProjectValidator.Validate(Project).Length == 0 ? ProjectValidator.MapTimeline(Project) : [];
+
+    private string PreviewStatus() => PlaybackCopy is null ? "No preview copy is available" :
+        $"Approximated timeline over a preview copy · {PlaybackCopy.Length / 1024d / 1024d:0.0} MiB";
 
     public void PlaybackUnavailable(string message) => InvalidatePlayback(message);
 
@@ -173,6 +226,12 @@ public sealed class DesktopReviewSession
     public double SelectedTimelineSeconds => Preview is null ? 0 :
         (double)Preview.Info.Actual.Ticks * Preview.Info.Actual.TimeBase.Numerator /
         Preview.Info.Actual.TimeBase.Denominator;
+
+    /// Where the player should seek for the current selection. An exact render is in timeline time; the
+    /// preview copy is in source time, so a timeline position has to be mapped back through the clips.
+    public PlaybackStep SelectedPlaybackStep() => Playback is not null || Mapping.Length == 0
+        ? new(0, SelectedTimelineSeconds, false)
+        : TimelinePlayback.Locate(Mapping, Project.TimeBase, SelectedTimelineSeconds);
 
     public async Task SelectSegmentAsync(string segmentId, CancellationToken token = default)
     {
@@ -304,7 +363,7 @@ public sealed class DesktopReviewSession
         else
         {
             SelectedSegmentId = null;
-            Preview = null;
+            PlaybackCopy = null;
             await InitializePreviewAsync(token);
         }
     }
@@ -374,8 +433,11 @@ public sealed class DesktopReviewSession
             RestoreSuppliedPreview();
             return;
         }
+        // The preview copy is of the source, so an edit never invalidates it: only the clip mapping moves.
+        // Any exact render is revision-bound and is dropped rather than left claiming to match.
         Playback = null;
-        PlaybackStatus = message;
+        RefreshMapping();
+        PlaybackStatus = PlaybackCopy is not null && CanApproximate ? PreviewStatus() : message;
     }
 
     private async Task RefreshAfterTimelineAsync(TimelineFrameInfo? selected, CancellationToken token)

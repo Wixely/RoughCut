@@ -316,6 +316,60 @@ internal static class DesktopTests
                 string.Join("; ", overflowing.Take(6)));
         });
 
+        await check("Timeline playback approximates cuts and reordering over one source copy", () =>
+        {
+            // Output order [1s,2s) then [3s,4s): a removed middle and a source that plays out of order.
+            var project = new EditProject
+            {
+                ProjectId = "approximation",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "source.mkv", new string('a', 64), 4000, 160, 96, "video/x-matroska")],
+                Timeline = [new("second", "source", 1000, 2000), new("fourth", "source", 3000, 4000)]
+            };
+            var map = RoughCut.Core.ProjectValidator.MapTimeline(project);
+            var timeBase = project.TimeBase;
+            Assert(RoughCut.Desktop.TimelinePlayback.CanApproximate(project), "A single-source timeline was refused.");
+
+            // Output second 0 is source second 1; output 1.5 is source 3.5 in the second clip.
+            var start = RoughCut.Desktop.TimelinePlayback.Locate(map, timeBase, 0);
+            Assert(start.ClipIndex == 0 && Math.Abs(start.SeekSeconds!.Value - 1.0) < 1e-6,
+                "The timeline start did not map to its source position.");
+            var later = RoughCut.Desktop.TimelinePlayback.Locate(map, timeBase, 1.5);
+            Assert(later.ClipIndex == 1 && Math.Abs(later.SeekSeconds!.Value - 3.5) < 1e-6,
+                "A later output time did not map into the second clip.");
+
+            // Inside the first clip nothing happens; reaching its end jumps to the next clip's source start.
+            Assert(RoughCut.Desktop.TimelinePlayback.Advance(map, timeBase, 0, 1.5) is { SeekSeconds: null, Ended: false, ClipIndex: 0 },
+                "Playback jumped while still inside a clip.");
+            var jump = RoughCut.Desktop.TimelinePlayback.Advance(map, timeBase, 0, 2.0);
+            Assert(jump.ClipIndex == 1 && jump.SeekSeconds is { } target && Math.Abs(target - 3.0) < 1e-6 && !jump.Ended,
+                "Reaching a clip boundary did not skip the removed material.");
+            Assert(RoughCut.Desktop.TimelinePlayback.Advance(map, timeBase, 1, 4.0).Ended,
+                "The end of the last clip did not stop playback.");
+            Assert(Math.Abs(RoughCut.Desktop.TimelinePlayback.OutputSeconds(map, timeBase, 1, 3.25) - 1.25) < 1e-6,
+                "A source position did not report its output time.");
+
+            // Contiguous clips need no seek, so an untouched timeline plays straight through.
+            var whole = new EditProject
+            {
+                ProjectId = "contiguous",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "source.mkv", new string('a', 64), 4000, 160, 96, "video/x-matroska")],
+                Timeline = [new("a", "source", 0, 2000), new("b", "source", 2000, 4000)]
+            };
+            var joined = RoughCut.Core.ProjectValidator.MapTimeline(whole);
+            Assert(RoughCut.Desktop.TimelinePlayback.Advance(joined, timeBase, 0, 2.0) is { SeekSeconds: null, ClipIndex: 1 },
+                "Contiguous clips forced an unnecessary seek.");
+
+            // An image-only or multi-source timeline cannot be approximated from one video copy.
+            Assert(!RoughCut.Desktop.TimelinePlayback.CanApproximate(project with
+            {
+                Assets = [.. project.Assets, new("other", "video", "other.mkv", new string('b', 64), 4000, 160, 96, "video/x-matroska")],
+                Timeline = [.. project.Timeline, new("extra", "other", 0, 1000)]
+            }), "A multi-source timeline was accepted for approximation.");
+            return Task.CompletedTask;
+        });
+
         await check("Desktop background work stays responsive and supersedes stale selections", async () =>
         {
             var coordinator = new RoughCut.Desktop.DesktopWorkCoordinator();
