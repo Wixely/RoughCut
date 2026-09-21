@@ -142,6 +142,36 @@ await Check("Tool locations resolve from environment, then settings file, then P
     Assert(absent.Ffprobe == "ffprobe" && absent.YtDlp == "yt-dlp" && absent.Deno is null,
         "Absent settings did not fall back to PATH with Deno left to yt-dlp.");
 });
+await Check("Omitted optional fields load as their declared defaults instead of failing", async () =>
+{
+    // Deserialization gives an absent property the type default, not the record's initializer, so a
+    // hand-written project that simply leaves out optional collections used to crash inside validation.
+    var path = Path.Combine(testRoot, "minimal-project.json");
+    await File.WriteAllTextAsync(path, """
+        { "schemaVersion": 1, "projectId": "minimal", "revision": 1,
+          "timeBase": { "numerator": 1, "denominator": 1000 },
+          "assets": [ { "id": "a", "kind": "video", "path": "media/source.mkv",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "duration": 1000, "width": 320, "height": 240, "mediaType": "video/x-matroska" } ],
+          "timeline": [ { "id": "c", "assetId": "a", "in": 0, "out": 1000 } ] }
+        """);
+    var loaded = await store.LoadAsync(path);
+    Assert(loaded.Speakers is [] && loaded.Speech is [] && loaded.Proposals is [] && loaded.Provenance is [] &&
+        loaded.SpeakerCorrections is [] && loaded.Evidence is [] && loaded.Observations is [] &&
+        loaded.Voices is [] && loaded.Replacements is [] && loaded.Synthesis is [],
+        "Absent collections did not load as empty.");
+    Assert(loaded.ExportMode == "prefer-stream-copy" && loaded.Prompt == "",
+        "Absent scalars did not load as their declared defaults.");
+    Assert(ProjectValidator.MapTimeline(loaded).Length == 1, "A minimal project did not map its timeline.");
+
+    // Validation reports malformed projects, so it must describe a missing collection rather than throw.
+    var broken = loaded with { Speech = null! };
+    var issues = ProjectValidator.Validate(broken);
+    Assert(issues.Length == 1 && issues[0].Location == "collections",
+        "A null collection was not reported as a single collections issue.");
+    Assert(ProjectValidator.Validate(loaded with { Timeline = [null!] }) is [{ Location: "collections" }],
+        "A null collection entry was not reported.");
+});
 await Check("Portable paths reject Windows and Unix escape forms", () =>
 {
     foreach (var path in new[] { "../secret", "/secret", "C:/secret", "file://secret", "media\\source.mp4", "media/../secret", "media/name:stream", "media//file" })

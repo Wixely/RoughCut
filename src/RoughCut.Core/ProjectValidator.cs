@@ -17,16 +17,19 @@ public static class ProjectValidator
         Check(project.Revision > 0, "revision", "Revision must be positive.");
         Check(project.TimeBase.IsValid, "timeBase", "Numerator and denominator must be positive.");
         Check(project.ExportMode is "prefer-stream-copy" or "copy-only" or "exact-edit", "exportMode", "Unknown export mode.");
-        if (project.Assets.Any(x => x is null) || project.Timeline.Any(x => x is null) ||
-            project.Speakers.Any(x => x is null) || project.Speech.Any(x => x is null) ||
-            project.SpeakerCorrections.Any(x => x is null) ||
-            project.Evidence.Any(x => x is null) || project.Observations.Any(x => x is null) ||
-            project.Proposals.Any(x => x is null) ||
-            project.Voices.Any(x => x is null) || project.Replacements.Any(x => x is null) ||
-            project.Synthesis.Any(x => x is null) ||
-            project.Provenance.Any(x => x is null))
+        // Validation reports malformed projects, so it must never fail on one: a missing collection is an
+        // issue to report, not an exception to throw out of the only thing that can explain the problem.
+        static bool Unusable<T>(T[]? items) => items is null || items.Any(item => item is null);
+        if (Unusable(project.Assets) || Unusable(project.Timeline) ||
+            Unusable(project.Speakers) || Unusable(project.Speech) ||
+            Unusable(project.SpeakerCorrections) ||
+            Unusable(project.Evidence) || Unusable(project.Observations) ||
+            Unusable(project.Proposals) ||
+            Unusable(project.Voices) || Unusable(project.Replacements) ||
+            Unusable(project.Synthesis) ||
+            Unusable(project.Provenance))
         {
-            issues.Add(new("invalid-project", "collections", "Null collection entries are not allowed."));
+            issues.Add(new("invalid-project", "collections", "Collections must be present and contain no null entries."));
             return issues.ToArray();
         }
 

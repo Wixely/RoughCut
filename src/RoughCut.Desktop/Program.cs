@@ -5,6 +5,10 @@ using RoughCut.Desktop;
 using RoughCut.Media;
 using SkiaSharp;
 
+// A window that vanishes tells nobody anything. Record what actually happened, wherever it happened.
+AppDomain.CurrentDomain.UnhandledException += (_, e) => ReportCrash(e.ExceptionObject as Exception, "unhandled");
+TaskScheduler.UnobservedTaskException += (_, e) => { ReportCrash(e.Exception, "background"); e.SetObserved(); };
+
 try
 {
     switch (args)
@@ -39,10 +43,33 @@ try
 }
 catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
     InvalidOperationException or KeyNotFoundException or RoughCut.Core.ProjectValidationException or
-    RoughCut.Core.RevisionConflictException or MediaToolException or DesktopPlaybackUnavailableException)
+    RoughCut.Core.RevisionConflictException or MediaToolException or DesktopPlaybackUnavailableException or
+    System.Text.Json.JsonException or UnauthorizedAccessException)
 {
-    Console.Error.WriteLine(exception.Message);
+    // Report what is wrong with the project, not just that something was.
+    Console.Error.WriteLine(FailureText.Describe(exception, args.Length > 1 ? args[1] : null));
     return 2;
+}
+
+static void ReportCrash(Exception? exception, string origin)
+{
+    var detail = exception?.ToString() ?? "An unidentified failure ended the process.";
+    Console.Error.WriteLine($"RoughCut hit an {origin} failure and is closing:");
+    Console.Error.WriteLine(detail);
+    try
+    {
+        var directory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RoughCut");
+        Directory.CreateDirectory(directory);
+        var log = Path.Combine(directory, "crash.log");
+        File.AppendAllText(log,
+            $"{DateTimeOffset.Now:O} [{origin}] {detail}{Environment.NewLine}{Environment.NewLine}");
+        Console.Error.WriteLine($"Recorded in {log}");
+    }
+    catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or NotSupportedException)
+    {
+        // Reporting a crash must never cause one.
+    }
 }
 
 static int Snapshot(string outputPath, DesktopReviewSession? session)

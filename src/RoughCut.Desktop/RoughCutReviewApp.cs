@@ -106,13 +106,24 @@ public sealed class RoughCutReviewApp : CupriApp
     /// at boundaries, which is what makes cuts and reordering visible without rendering a new video.
     public override PresentInfo Present(float width, float height)
     {
-        if (_session is not null && playback is { Playing: true } && Session.Playback is null &&
-            Session.Mapping is { Length: > 0 } mapping)
+        // Read the session once: it can be cleared from another thread, and a throw here would end the
+        // process on the render path rather than surface anywhere a person could read it.
+        var session = _session;
+        try
         {
-            var step = TimelinePlayback.Advance(mapping, Session.Project.TimeBase, _clipIndex, playback.PositionSeconds);
-            _clipIndex = step.ClipIndex;
-            if (step.Ended) playback.Pause();
-            else if (step.SeekSeconds is { } seek) playback.Seek(seek);
+            if (session is not null && playback is { Playing: true } && session.Playback is null &&
+                session.Mapping is { Length: > 0 } mapping)
+            {
+                var step = TimelinePlayback.Advance(mapping, session.Project.TimeBase, _clipIndex, playback.PositionSeconds);
+                _clipIndex = step.ClipIndex;
+                if (step.Ended) playback.Pause();
+                else if (step.SeekSeconds is { } seek) playback.Seek(seek);
+            }
+        }
+        catch (Exception exception)
+        {
+            _model.Status = "Playback stopped: " + exception.Message;
+            playback?.Pause();
         }
         return base.Present(width, height);
     }
@@ -191,7 +202,7 @@ public sealed class RoughCutReviewApp : CupriApp
             var opened = await DesktopReviewSession.LoadAsync(Clean(projectPath));
             _session = opened;
             _recent.Record(opened.ProjectPath, opened.Project.ProjectId);
-        });
+        }, Clean(projectPath));
 
     private void CreateFromUrl(string sourceUrl)
     {
@@ -217,9 +228,9 @@ public sealed class RoughCutReviewApp : CupriApp
             var created = await DesktopReviewSession.CreateAsync(Clean(mediaPath));
             _session = created;
             _recent.Record(created.ProjectPath, created.Project.ProjectId);
-        });
+        }, Clean(mediaPath));
 
-    private void Start(string progress, string busy, Func<Task> action)
+    private void Start(string progress, string busy, Func<Task> action, string? path = null)
     {
         _model.OpenMessage = progress;
         _model.Status = progress;
@@ -230,13 +241,18 @@ public sealed class RoughCutReviewApp : CupriApp
             {
                 _model.LauncherClass = "hidden";
                 Complete(null, seekAfter: false);
-                StartReview();
+                // Opening succeeded but the review view may still fail to build; stay on a readable screen.
+                if (_session is not null) StartReview();
             }
             else
             {
+                // A project that will not open leaves the launcher visible with the reason, rather than
+                // dropping into an empty workspace or ending the process.
                 _session = null;
-                _model.OpenMessage = exception.Message;
-                Complete(exception, seekAfter: false);
+                var described = FailureText.Describe(exception, path);
+                ShowLauncher(described);
+                _model.Status = described;
+                _document?.Refresh();
             }
         })) return;
         _model.OpenMessage = busy;
@@ -375,7 +391,14 @@ public sealed class RoughCutReviewApp : CupriApp
     private void Complete(Exception? exception, bool seekAfter)
     {
         _model.Status = exception is null ? "Ready" : exception.Message;
-        Rebuild(preserveStatus: true);
+        // Complete runs on background completion callbacks, where an escaping exception would end the
+        // process with no message. A view that cannot be rebuilt is reported, never fatal.
+        try { Rebuild(preserveStatus: true); }
+        catch (Exception failure)
+        {
+            _model.Status = "This project cannot be shown: " + failure.Message;
+            _model.WorkspaceClass = "hidden";
+        }
         _document?.Refresh();
         if (exception is null && seekAfter && _session is not null && playback is not null)
         {
@@ -501,8 +524,8 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.Selection = Session.Selection;
         _model.Crop = Session.Crop;
         var selectedClip = Session.SelectedClipId is null ? null :
-            project.Timeline.Single(item => item.Id == Session.SelectedClipId);
-        var selectedAsset = selectedClip is null ? null : project.Assets.Single(item => item.Id == selectedClip.AssetId);
+            project.Timeline.FirstOrDefault(item => item.Id == Session.SelectedClipId);
+        var selectedAsset = selectedClip is null ? null : project.Assets.FirstOrDefault(item => item.Id == selectedClip.AssetId);
         var editable = selectedClip is not null && selectedAsset?.Kind == "video";
         var crop = editable ? selectedClip!.Crop ?? new Crop(0, 0, selectedAsset!.Width, selectedAsset.Height) : new(0, 0, 1, 1);
         _model.CropEditorClass = editable ? "" : "hidden";
@@ -545,18 +568,24 @@ public sealed class RoughCutReviewApp : CupriApp
             Badge = item.Overlap ? "overlap" : item.Assignment,
             CssClass = item.Id == Session.SelectedSegmentId ? "selected" : ""
         }).ToArray();
-        _model.Clips = ProjectValidator.MapTimeline(project).Take(200).Select(item => new ClipRow
+        // Mapping is prepared by the session, so an unopenable project cannot throw from the view.
+        _model.Clips = Session.Mapping.Take(200).Select(item => new ClipRow
         {
             Id = item.ClipId,
             Range = $"{FormatTime(item.OutputIn, project.TimeBase)}–{FormatTime(item.OutputOut, project.TimeBase)}",
             Source = item.AssetId,
             CssClass = item.ClipId == Session.SelectedClipId ? "selected" : ""
         }).ToArray();
-        _model.Evidence = project.Proposals.Take(100).Select(proposal =>
-        {
-            var observation = project.Observations.First(item => item.Id == proposal.ObservationId);
-            return new EvidenceRow { Id = observation.Id, Decision = proposal.Decision, Summary = observation.Summary };
-        }).ToArray();
+        // A proposal whose observation is missing is skipped rather than allowed to break the whole view.
+        _model.Evidence = project.Proposals.Take(100)
+            .Select(proposal => (proposal, observation: project.Observations.FirstOrDefault(item => item.Id == proposal.ObservationId)))
+            .Where(pair => pair.observation is not null)
+            .Select(pair => new EvidenceRow
+            {
+                Id = pair.observation!.Id,
+                Decision = pair.proposal.Decision,
+                Summary = pair.observation.Summary
+            }).ToArray();
         _model.Truncation = project.Speech.Length > 500 ? $"Showing 500 of {project.Speech.Length} transcript rows" : "";
         if (!preserveStatus) _model.Status = "Ready";
     }

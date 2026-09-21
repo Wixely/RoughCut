@@ -116,8 +116,21 @@ public sealed class DesktopReviewSession
     /// The source copy the player shows. Editing never rebuilds it, because the source does not change.
     public SourceProxy? PlaybackCopy { get; private set; }
 
-    /// Clips in output order, for approximating cuts and reordering over that one copy.
-    public TimelineMapping[] Mapping { get; private set; } = [];
+    private EditProject? _mappedProject;
+    private TimelineMapping[] _mapping = [];
+
+    /// Clips in output order, for approximating cuts and reordering over that one copy. Recomputed when the
+    /// project instance changes, and empty rather than throwing when a project cannot be mapped at all.
+    public TimelineMapping[] Mapping
+    {
+        get
+        {
+            if (ReferenceEquals(_mappedProject, Project)) return _mapping;
+            _mapping = ProjectValidator.Validate(Project).Length == 0 ? ProjectValidator.MapTimeline(Project) : [];
+            _mappedProject = Project;
+            return _mapping;
+        }
+    }
 
     public bool CanApproximate => TimelinePlayback.CanApproximate(Project);
 
@@ -131,7 +144,7 @@ public sealed class DesktopReviewSession
             RestoreSuppliedPreview();
             return;
         }
-        RefreshMapping();
+
         if (!CanApproximate)
         {
             PlaybackCopy = null;
@@ -189,9 +202,6 @@ public sealed class DesktopReviewSession
             throw;
         }
     }
-
-    private void RefreshMapping() =>
-        Mapping = ProjectValidator.Validate(Project).Length == 0 ? ProjectValidator.MapTimeline(Project) : [];
 
     private string PreviewStatus() => PlaybackCopy is null ? "No preview copy is available" :
         $"Approximated timeline over a preview copy · {PlaybackCopy.Length / 1024d / 1024d:0.0} MiB";
@@ -436,7 +446,7 @@ public sealed class DesktopReviewSession
         // The preview copy is of the source, so an edit never invalidates it: only the clip mapping moves.
         // Any exact render is revision-bound and is dropped rather than left claiming to match.
         Playback = null;
-        RefreshMapping();
+
         PlaybackStatus = PlaybackCopy is not null && CanApproximate ? PreviewStatus() : message;
     }
 

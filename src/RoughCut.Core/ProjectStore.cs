@@ -21,9 +21,32 @@ public sealed class ProjectStore
         }
         var project = JsonSerializer.Deserialize(buffer.ToArray(), ProjectJson.Default.EditProject)
             ?? throw new InvalidDataException("Project cannot be null.");
+        project = WithoutAbsentCollections(project);
         ProjectValidator.EnsureValid(project);
         return project;
     }
+
+    /// An omitted optional collection deserializes as null rather than the declared empty default, so a
+    /// project that simply leaves one out would otherwise fail deep inside validation. An explicit null is
+    /// still rejected by the deserializer, so anything null here was absent and means empty.
+    private static EditProject WithoutAbsentCollections(EditProject project) => project with
+    {
+        // Omitted scalars with a declared default mean that default, not an invalid empty value.
+        Prompt = project.Prompt ?? "",
+        ExportMode = project.ExportMode ?? "prefer-stream-copy",
+        Assets = project.Assets ?? [],
+        Timeline = project.Timeline ?? [],
+        Speakers = project.Speakers ?? [],
+        SpeakerCorrections = project.SpeakerCorrections ?? [],
+        Speech = project.Speech ?? [],
+        Evidence = project.Evidence ?? [],
+        Observations = project.Observations ?? [],
+        Proposals = project.Proposals ?? [],
+        Voices = project.Voices ?? [],
+        Replacements = project.Replacements ?? [],
+        Synthesis = project.Synthesis ?? [],
+        Provenance = project.Provenance ?? []
+    };
 
     // Expected revision 0 creates a new project; updates require the next revision.
     // All cooperating writers hold the same lock through compare-and-replace.
