@@ -101,6 +101,7 @@ public sealed class RoughCutReviewApp : CupriApp
     }
 
     private int _clipIndex;
+    private bool _ended;
     private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _pending = new();
 
     /// Refresh rebuilds the document, so changing the model or refreshing from a work thread races the
@@ -139,10 +140,26 @@ public sealed class RoughCutReviewApp : CupriApp
             if (session is not null && playback is { Playing: true } && session.Playback is null &&
                 session.Mapping is { Length: > 0 } mapping)
             {
-                var step = TimelinePlayback.Advance(mapping, session.Project.TimeBase, _clipIndex, playback.PositionSeconds);
-                _clipIndex = step.ClipIndex;
-                if (step.Ended) playback.Pause();
-                else if (step.SeekSeconds is { } seek) playback.Seek(seek);
+                var timeBase = session.Project.TimeBase;
+                if (_ended)
+                {
+                    // Playing again after the timeline finished starts it over. Without this the position
+                    // is still past the last clip, so play would stop again immediately.
+                    _ended = false;
+                    _clipIndex = 0;
+                    playback.Seek(TimelinePlayback.Seconds(mapping[0].SourceIn, timeBase));
+                }
+                else
+                {
+                    var step = TimelinePlayback.Advance(mapping, timeBase, _clipIndex, playback.PositionSeconds);
+                    _clipIndex = step.ClipIndex;
+                    if (step.Ended)
+                    {
+                        playback.Pause();
+                        _ended = true;
+                    }
+                    else if (step.SeekSeconds is { } seek) playback.Seek(seek);
+                }
             }
         }
         catch (Exception exception)
@@ -433,8 +450,10 @@ public sealed class RoughCutReviewApp : CupriApp
         _document?.Refresh();
         if (exception is null && seekAfter && _session is not null && playback is not null)
         {
+            // A new selection is a deliberate move, so the timeline is no longer finished.
             var step = Session.SelectedPlaybackStep();
             _clipIndex = step.ClipIndex;
+            _ended = false;
             if (step.SeekSeconds is { } seconds) playback.Seek(seconds);
         }
     }

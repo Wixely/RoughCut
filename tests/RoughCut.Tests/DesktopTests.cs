@@ -349,6 +349,15 @@ internal static class DesktopTests
             Assert(Math.Abs(RoughCut.Desktop.TimelinePlayback.OutputSeconds(map, timeBase, 1, 3.25) - 1.25) < 1e-6,
                 "A source position did not report its output time.");
 
+            // Scrubbing the player's own bar lands anywhere in the source. Landing inside another clip
+            // adopts that clip rather than marching forward, so seeking backwards is not undone.
+            var scrubbedBack = RoughCut.Desktop.TimelinePlayback.Advance(map, timeBase, 1, 1.25);
+            Assert(scrubbedBack.ClipIndex == 0 && scrubbedBack.SeekSeconds is null && !scrubbedBack.Ended,
+                "Scrubbing back into an earlier clip was dragged forward again.");
+            var scrubbedToCut = RoughCut.Desktop.TimelinePlayback.Advance(map, timeBase, 1, 2.5);
+            Assert(scrubbedToCut.ClipIndex == 1 && scrubbedToCut.SeekSeconds is { } resumed &&
+                Math.Abs(resumed - 3.0) < 1e-6, "Scrubbing into removed material did not move to retained material.");
+
             // Contiguous clips need no seek, so an untouched timeline plays straight through.
             var whole = new EditProject
             {

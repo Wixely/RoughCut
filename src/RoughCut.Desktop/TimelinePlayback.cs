@@ -51,6 +51,22 @@ public static class TimelinePlayback
         if (sourceSeconds >= start - BoundarySeconds && sourceSeconds < end - BoundarySeconds)
             return new(clipIndex, null, false);
 
+        // Someone dragging the player's own scrub bar lands anywhere in the source, including material a
+        // different clip keeps and material the timeline removed.
+        if (sourceSeconds < start - BoundarySeconds)
+        {
+            // Inside another clip: adopt it, so scrubbing backwards is not dragged forwards again.
+            for (var index = 0; index < timeline.Length; index++)
+            {
+                if (index == clipIndex) continue;
+                if (sourceSeconds >= Seconds(timeline[index].SourceIn, timeBase) - BoundarySeconds &&
+                    sourceSeconds < Seconds(timeline[index].SourceOut, timeBase) - BoundarySeconds)
+                    return new(index, null, false);
+            }
+            // Inside material the timeline removed: resume at the retained material that follows.
+            return new(clipIndex, start, false);
+        }
+
         if (clipIndex + 1 >= timeline.Length) return new(clipIndex, null, true);
         var next = timeline[clipIndex + 1];
         var nextStart = Seconds(next.SourceIn, timeBase);
