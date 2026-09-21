@@ -18,5 +18,7 @@
 | [0014](0014-cupri-desktop-review.md) | 2026-09-19 | Accepted for initial Windows review slice | CupriFace shell with exact revision-aware FFmpeg frames and persisted speaker undo/redo |
 | [0015](0015-validated-desktop-playback-proxy.md) | 2026-09-19 | Accepted for bounded Windows desktop playback | Revision-keyed VP9/Opus proxy from the validated timeline export |
 | [0016](0016-public-github.md) | 2026-09-20 | Accepted | Public Wixely/RoughCut GitHub repository and MIT licensing; supersedes hosting deferral in 0001 |
+| [0017](0017-reversible-timeline-editing.md) | 2026-09-20 | Accepted for the bounded desktop timeline-editing slice | `set-range` edit action so interactive trim/split/reorder stay exactly reversible; `trim` stays narrowing-only |
+| [0018](0018-default-javascript-runtime.md) | 2026-09-21 | Accepted for URL acquisition | Use yt-dlp's default Deno runtime instead of clearing every runtime; supersedes that element of 0007 |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

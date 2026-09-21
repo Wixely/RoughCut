@@ -9,47 +9,26 @@ try
 {
     switch (args)
     {
-        case [] or ["help"] or ["--help"]:
+        case ["help"] or ["--help"]:
             Console.WriteLine("""
                 RoughCut desktop review
-                  review <project.json> [pre-rendered-review.webm]
-                  snapshot <project.json> <new-output.png>
-                  probe-playback <project.json> <seconds>
+                  (no arguments)                                  open the window and pick a project
+                  review [project.json] [pre-rendered.webm]       open a project directly
+                  snapshot [project.json] <new-output.png>        render the window headlessly
+                  probe-playback <project.json> <seconds>         measure decoded playback drift
                 """);
             return 0;
+        case [] or ["review"]:
+            return RunWindow(null, null);
         case ["review", var projectPath, .. var reviewOptions] when reviewOptions.Length <= 1:
-            {
-                var session = await DesktopReviewSession.LoadAsync(projectPath);
-                DesktopPlaybackController? playback = null;
-                if (!DesktopPlaybackController.Available)
-                    session.PlaybackUnavailable("CupriFace native playback decoders are unavailable");
-                else
-                {
-                    playback = new();
-                    if (reviewOptions.FirstOrDefault() is { } reviewProxy)
-                        session.UsePlaybackPreview(reviewProxy);
-                }
-                DesktopHost.Run(new RoughCutReviewApp(session, playback), document =>
-                {
-                    if (playback is null) return;
-                    document.UseVideo(playback);
-                });
-                return 0;
-            }
+            return RunWindow(await DesktopReviewSession.LoadAsync(projectPath), reviewOptions.FirstOrDefault());
+        case ["snapshot", var launcherOutput]:
+            return Snapshot(launcherOutput, null);
         case ["snapshot", var projectPath, var outputPath]:
             {
-                outputPath = Path.GetFullPath(outputPath);
-                if (File.Exists(outputPath)) throw new IOException("Snapshot output already exists.");
                 var session = await DesktopReviewSession.LoadAsync(projectPath);
                 await session.InitializePreviewAsync();
-                using var document = new RoughCutReviewApp(session).CreateDocument();
-                using var image = document.RenderToImage(1280, 800, new SKColor(0x0b, 0x0f, 0x17));
-                using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-                Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-                await using var stream = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                data.SaveTo(stream);
-                Console.WriteLine(outputPath);
-                return 0;
+                return Snapshot(outputPath, session);
             }
         case ["probe-playback", var projectPath, var secondsText]:
             return await ProbePlaybackAsync(projectPath, secondsText);
@@ -64,6 +43,40 @@ catch (Exception exception) when (exception is IOException or ArgumentException 
 {
     Console.Error.WriteLine(exception.Message);
     return 2;
+}
+
+static int Snapshot(string outputPath, DesktopReviewSession? session)
+{
+    outputPath = Path.GetFullPath(outputPath);
+    if (File.Exists(outputPath)) throw new IOException("Snapshot output already exists.");
+    using var document = new RoughCutReviewApp(session).CreateDocument();
+    using var image = document.RenderToImage(1280, 800, new SKColor(0x0b, 0x0f, 0x17));
+    using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+    using var stream = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    data.SaveTo(stream);
+    Console.WriteLine(outputPath);
+    return 0;
+}
+
+static int RunWindow(DesktopReviewSession? session, string? reviewProxy)
+{
+    DesktopPlaybackController? playback = null;
+    if (!DesktopPlaybackController.Available)
+        session?.PlaybackUnavailable("CupriFace native playback decoders are unavailable");
+    else
+    {
+        playback = new();
+        if (reviewProxy is not null) session?.UsePlaybackPreview(reviewProxy);
+    }
+    var recent = new RecentProjects();
+    if (session is not null) recent.Record(session.ProjectPath, session.Project.ProjectId);
+    DesktopHost.Run(new RoughCutReviewApp(session, playback, recent), document =>
+    {
+        if (playback is null) return;
+        document.UseVideo(playback);
+    });
+    return 0;
 }
 
 static async Task<int> ProbePlaybackAsync(string projectPath, string secondsText)

@@ -1,19 +1,40 @@
 # Desktop review
 
 - Added: 2026-09-19
-- Updated: 2026-09-20
+- Updated: 2026-09-21 (project launcher)
 - Owner: Implementation agent
 - Review: When CupriFace changes, the proxy format changes or Linux acceptance begins
+
+## Opening and creating projects
+
+Started with no arguments, RoughCut opens its window on the project launcher: the projects opened most recently on this computer, a video-URL field, **New from a local video…**, **Open a project…**, a drop target, and a path field. Choosing one opens it; the window then behaves exactly as if the path had been passed on the command line, and **Open another** returns to the launcher.
+
+Pasting a URL and pressing **Fetch** downloads the video *and its subtitles* through the bounded yt-dlp policy, creates a project for it, and selects the best caption track — the same `CreateProjectFromUrlAsync` the CLI `create-url` command and the `roughcut_create_project_from_url` MCP tool call. The yt-dlp arguments stay RoughCut's: `--write-subs --write-auto-subs --sub-langs en,-live_chat --sub-format srt/best --convert-subs srt`, plus `--ignore-config`, `--no-playlist` and the size bounds described in the [acquisition guide](acquisition-and-speech.md). No caller has to remember them, and none can drift.
+
+Each fetch lands in its own dated folder under `%USERPROFILE%\Videos\RoughCut`, which `ROUGHCUT_PROJECTS` overrides. The desktop honours `ROUGHCUT_YTDLP`, `ROUGHCUT_DENO`, `ROUGHCUT_FFMPEG` and `ROUGHCUT_FFPROBE`. Deno needs no configuration when it is on `PATH` or beside `yt-dlp.exe`, because yt-dlp enables it by default and RoughCut no longer clears that; `ROUGHCUT_DENO` only pins a specific binary. A source with no usable subtitles still produces a valid project and reports why. A download can take minutes, shows no progress, and cannot be cancelled from the window.
+
+**New from a local video…** picks a video and creates a project for it with a single clip covering the whole source, then opens it. The project is written **beside the video**, named after it — `holiday.mp4` produces `holiday.json` — because an asset's stored path must stay relative and inside the project directory to remain portable. An existing name is never overwritten: the next free `holiday-2.json`, `holiday-3.json` is used. This is the same operation as the CLI `create` command, through the same application API.
+
+The drop target and the path field accept either kind: a `.json` path opens an existing project, and anything else is treated as the video for a new one. That keeps creation available where no native picker exists.
+
+**Open a project…** opens the real operating-system file picker. CupriFace 0.26.1 has no dialog of its own and its shell ships SDL2, which predates `SDL_ShowOpenFileDialog`, so RoughCut calls the platform directly: `GetOpenFileNameW` from `comdlg32.dll` on Windows, and `zenity` or `kdialog` on Linux. The dialog runs on its own single-threaded-apartment thread, so the window keeps painting while it is open, and it is owned by the RoughCut window so it stays in front. Both buttons are hidden when no picker is available, leaving drop and the path field. `GetOpenFileName` moves the process working directory as the person browses — `OFN_NOCHANGEDIR` is documented as ineffective for it — so RoughCut restores the working directory when the dialog closes; every workspace-relative path depends on that.
+
+The launcher list is per-user window state, not project data. It is stored outside the repository at `%LOCALAPPDATA%\RoughCut\recent-projects.json`, holds at most ten entries most-recent-first, and drops entries whose file no longer exists. A damaged or unreadable history is ignored rather than allowed to stop the window opening. `ROUGHCUT_RECENT_PROJECTS` overrides the file, which is how tests and headless renders stay deterministic.
+
+## Reviewing
 
 The RC-06 Windows desktop review surface uses CupriFace 0.26.1. It reads the same portable JSON project as the CLI and MCP host. Selecting a transcript or editorial-evidence row resolves that source time through the current timeline revision, asks the shared application layer for the exact rendered PNG, seeks the playback proxy to the resolved timeline time, and displays its source/timeline timing and active crop description.
 
 After opening the window, RoughCut prepares the first exact frame and the bounded validated timeline proxy in the background. The VP9/Opus WebM proxy includes accepted cuts, reordering, crop rendering, inserted images and applied voice replacements. It is keyed by the exact project JSON hash and revision, capped at 128 MiB and stored under the ignored `.roughcut-preview` directory next to the project. CupriFace.Media supplies native VP9/Opus decoding, an audio-clocked player and play, pause, mute, seek and fullscreen controls. Reloading a changed revision prepares a new proxy without blocking the event loop.
+
+The timeline card edits the selected clip. It names the clip, its position in the timeline and its retained source interval, then offers integer IN/OUT fields with **Apply trim**, plus **Split**, **Earlier** and **Later**. Apply trim sets the retained interval through one `set-range` operation, so it both shortens a clip and restores source material a previous trim dropped, bounded by the asset duration. Split divides the clip at the currently selected source frame and names the new clip after it, for example `middle` and `middle-2`. Earlier and Later exchange the clip with its neighbour through one `reorder` operation. Each control saves exactly one revision-checked edit; undo and redo replay the exact inverse, joining a split back into one clip in a single transactional batch. Controls that the current selection cannot apply are hidden rather than offered: Split appears only when the selected source frame lies strictly inside the clip, and the move buttons only when a neighbour exists in that direction. Removing clips stays a CLI/MCP operation because reinserting a removed video clip is not an available edit action, so desktop undo could not reverse it. See [decision 0017](decisions/0017-reversible-timeline-editing.md) and the [timeline-editing evidence](evidence/2026-09-20-desktop-timeline-editing.md).
 
 The review panel shows speaker labels and overlap/assignment state. Renaming a speaker uses the existing revision-checked speaker edit API. The crop editor shows an uncropped source frame, a proportional crop rectangle, four corner handles and integer X/Y/width/height controls for the selected video clip. Drag the rectangle to move it or a corner to resize it; live values are clamped to source pixels, and release persists one transactional crop edit. Cancel restores the starting rectangle. Apply and Full frame use the same edit API, while the numeric controls remain the precise keyboard-accessible path. Undo and redo persist inverse/forward speaker or crop operations, so project revision semantics remain consistent across desktop, CLI and MCP callers. A crop refreshes the exact rendered frame and invalidates/rebuilds the playback proxy. Reload clears local undo history and refreshes the selected frame from the saved revision.
 
 Run the window from Windows PowerShell:
 
 ```powershell
+dotnet run --project src/RoughCut.Desktop
 dotnet run --project src/RoughCut.Desktop -- review artifacts/demo/project.json
 ```
 
@@ -23,18 +44,21 @@ For a timeline whose strict export is currently unsupported, a known local WebM 
 dotnet run --project src/RoughCut.Desktop -- review artifacts/demo/project.json artifacts/demo/review.webm
 ```
 
-The **RoughCut desktop review** VS Code launch prompts for the same project path. A deterministic headless render is available for testing:
+A supplied render stays the session's playback. Editing the timeline does not discard it and does not attempt a validated rebuild that would fail for the very source it was supplied for; instead the status line reports that it does not show edits since the revision it was supplied at. Its positions no longer match the edited timeline, so seeking to a transcript row becomes approximate.
+
+The **▶ RoughCut** VS Code launch starts the app with no arguments, so it opens on the launcher; the two **RoughCut desktop: open a project** launches prompt for a path and an optional pre-rendered preview. A deterministic headless render is available for testing, with the project path omitted to render the launcher itself:
 
 ```powershell
 dotnet run --project src/RoughCut.Desktop -- snapshot artifacts/demo/project.json artifacts/demo/review.png
+dotnet run --project src/RoughCut.Desktop -- snapshot artifacts/demo/launcher.png
 ```
 
 The output path must not exist. FFmpeg and FFprobe must be available through the same configuration used by the application layer.
 
-Playback preparation inherits the current export gate: one active video/audio source, no more than 32 clips, no more than 60 seconds and the documented frame/sample alignment and asset rules. Unsupported projects retain the exact-frame poster and show the failure instead of silently approximating the timeline. Frame requests are serialized off the event path; a newer selection cancels the older request and only a fully decoded result is committed. Revision-changing commands are also serialized, while proxy preparation is independently cancellable and discarded when its project revision becomes stale. The native player still loads the complete bounded proxy into memory. General timeline trim, split and reorder controls are not present. The transcript is capped at 500 visible rows, the timeline at 200 clips and evidence at 100 proposals.
+Playback preparation inherits the current export gate: one active video/audio source, no more than 32 clips, no more than 60 seconds and the documented frame/sample alignment and asset rules. Unsupported projects retain the exact-frame poster and show the failure instead of silently approximating the timeline. Frame requests are serialized off the event path; a newer selection cancels the older request and only a fully decoded result is committed. Revision-changing commands are also serialized, while proxy preparation is independently cancellable and discarded when its project revision becomes stale. The native player still loads the complete bounded proxy into memory. A timeline edit invalidates a built proxy and rebuilds it, and a selection whose source time is no longer retained falls back to the first retained frame. The transcript is capped at 500 visible rows, the timeline at 200 clips and evidence at 100 proposals.
 
 Windows headless rendering, dummy-device A/V timing and a framework-dependent Windows x64 publish have executed. The two-second published probe decoded 20 frames with 0.0 ms measured drift growth and zero underruns. An interactive window/debugger session, physical audio-device playback and Linux execution have not.
 
 CupriFace and CupriFace.Shell release packages are stored under `vendor/nuget` with hashes and provenance. They are MIT-licensed public release artifacts. RoughCut does not redistribute CupriFace native media codecs in this slice; preview pixels come from the already validated RoughCut FFmpeg path.
 
-Next owner/action: **Implementation agent: add revision-safe clip trim, split and reorder controls.**
+Next owner/action: **Implementation agent: exercise the launcher and review window on a physical device — live pointer editing, audio-device playback and Linux execution — and measure representative speaker/overlap quality when fixtures arrive.**

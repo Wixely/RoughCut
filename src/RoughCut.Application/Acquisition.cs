@@ -60,14 +60,18 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
 
     internal static string[] BuildArguments(Uri source, string staging, string? denoPath)
     {
+        // Deliberately no --no-js-runtimes: that clears yt-dlp's default Deno entry, which silently costs
+        // format availability on YouTube. yt-dlp already disables Node, QuickJS and Bun by default, so the
+        // runtime stays Deno either way. --no-remote-components still stops any JavaScript being fetched.
         var arguments = new List<string>
         {
-            "--ignore-config", "--no-js-runtimes", "--no-remote-components", "--no-playlist", "--max-filesize", "536870912",
+            "--ignore-config", "--no-remote-components", "--no-playlist", "--max-filesize", "536870912",
             "--no-overwrites", "--no-progress", "--newline", "--write-info-json", "--write-subs", "--write-auto-subs",
             "--sub-langs", "en,-live_chat", "--sub-format", "srt/best", "--convert-subs", "srt",
             "--merge-output-format", "mkv", "--remux-video", "mkv", "--paths", staging,
             "--output", "source.%(ext)s"
         };
+        // An explicit path pins which Deno runs; without one yt-dlp finds Deno on PATH or beside its executable.
         if (denoPath is not null) arguments.AddRange(["--js-runtimes", "deno:" + denoPath]);
         arguments.Add("--");
         arguments.Add(source.AbsoluteUri);

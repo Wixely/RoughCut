@@ -201,6 +201,13 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         => TextAsync(() => operations.AcquireAsync(sourceUrl, destinationDirectory, denoPath, cancellationToken),
             ApplicationJson.Default.AcquisitionResult);
 
+    [McpServerTool(Name = "roughcut_create_project_from_url")]
+    [Description("Acquire one HTTP(S) video plus its subtitles, create a project beside the downloaded media and select the best caption track, in one bounded step. Use this instead of composing acquire, create and select_captions by hand; the yt-dlp subtitle and format policy is fixed by RoughCut.")]
+    public Task<CallToolResult> CreateProjectFromUrlAsync(string sourceUrl, string destinationDirectory,
+        CancellationToken cancellationToken, string? denoPath = null, string preferredLanguage = "en")
+        => TextAsync(() => operations.CreateProjectFromUrlAsync(sourceUrl, destinationDirectory, denoPath,
+            preferredLanguage, cancellationToken), ApplicationJson.Default.UrlProjectResult);
+
     [McpServerTool(Name = "roughcut_transcribe_local")]
     [Description("Transcribe one project media asset locally with the configured pinned Whisper base.en model, persist timed speech/captions, and advance the expected revision.")]
     public async Task<CallToolResult> TranscribeLocalAsync(string projectPath, string assetId, long expectedRevision,

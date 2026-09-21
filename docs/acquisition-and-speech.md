@@ -12,9 +12,18 @@
 ```powershell
 $env:ROUGHCUT_YTDLP = 'C:\tools\yt-dlp.exe'
 dotnet run --project src/RoughCut.Cli -- acquire https://example.com/video artifacts/acquired/video
+dotnet run --project src/RoughCut.Cli -- create-url https://example.com/video artifacts/acquired/video
 ```
 
-An optional third argument supplies a Deno executable and becomes an explicit `--js-runtimes deno:<path>` setting. RoughCut never enables Node.js or remote yt-dlp components and does not install a runtime. The accepted Windows configuration uses standalone Deno 2.9.7. Current yt-dlp documentation says full YouTube support needs yt-dlp-ejs plus a supported JavaScript runtime and recommends Deno; official standalone yt-dlp builds include the EJS component. Recheck [yt-dlp requirements](https://github.com/yt-dlp/yt-dlp#dependencies) and the [EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS) when updating either executable.
+`create-url` runs the whole sequence in one bounded step: acquire the URL with its subtitles, create `project.json` beside the downloaded media, and select the best caption track with its provenance. It is the same `CreateProjectFromUrlAsync` behind the desktop launcher's **Fetch** button and the `roughcut_create_project_from_url` MCP tool, so no host has to compose acquire, create and caption selection by hand or reproduce the yt-dlp argument policy. A source with no usable subtitles still yields a valid project and reports the reason rather than failing.
+
+### JavaScript runtime
+
+yt-dlp has needed an external JavaScript runtime for full YouTube support since 2025.11.12. It is not a hard requirement: without one, format availability is limited — "severely so in some cases" — and is expected to worsen over time. Of the four supported runtimes yt-dlp enables **only Deno by default**, disabling Node, QuickJS and Bun for security reasons, and finds Deno on `PATH` or beside `yt-dlp.exe`. It never downloads or installs a runtime.
+
+RoughCut therefore leaves that default alone. It does **not** send `--no-js-runtimes`, which would clear the default Deno entry and silently cost format availability even on a machine where Deno is installed; see [decision 0018](decisions/0018-default-javascript-runtime.md), which supersedes that element of [0007](decisions/0007-live-acquisition-and-whisper.md). An optional third CLI argument, or `ROUGHCUT_DENO` for the desktop, supplies a Deno executable and becomes an explicit `--js-runtimes deno:<path>` setting that pins exactly which binary runs. The recorded Windows configuration used standalone Deno 2.9.7.
+
+What RoughCut does still refuse is remote code: `--no-remote-components` stops yt-dlp downloading EJS scripts from GitHub or npm at run time, which official standalone builds do not need because `yt-dlp-ejs` is bundled with them. Node.js is never enabled. Recheck the [yt-dlp requirements](https://github.com/yt-dlp/yt-dlp#dependencies), the [EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS) and the [runtime announcement](https://github.com/yt-dlp/yt-dlp/issues/15012) when updating either executable.
 
 The current adapter is intended for a trusted local user or MCP client. It does not provide the private-address/redirect/cookie policy needed for a hosted URL-ingestion service.
 

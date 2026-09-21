@@ -8,6 +8,20 @@ internal static class DesktopTests
         if (!condition) throw new Exception(message);
     }
 
+    private static void Throws<T>(Action action) where T : Exception
+    {
+        try { action(); }
+        catch (T) { return; }
+        throw new Exception($"Expected {typeof(T).Name}.");
+    }
+
+    private static async Task Throws<T>(Func<Task> action) where T : Exception
+    {
+        try { await action(); }
+        catch (T) { return; }
+        throw new Exception($"Expected {typeof(T).Name}.");
+    }
+
     public static async Task RunAsync(Func<string, Func<Task>, Task> check, string[] args, string root)
     {
         var option = Array.IndexOf(args, "--desktop");
@@ -57,6 +71,214 @@ internal static class DesktopTests
             Assert(saved.Revision == 4 && saved.Timeline.Single().Crop == crop && session.SourcePreview is not null &&
                 session.Preview?.Info.Crop == crop && session.CanUndo && !session.CanRedo && session.Playback is null,
                 "Desktop crop history or exact-frame refresh did not preserve the revisioned edit.");
+        });
+
+        await check("Desktop trim, split and reorder persist with undo and redo", async () =>
+        {
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader().InspectAsync(source);
+            var middle = info.DurationTicks / 2;
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-timeline",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                Timeline = [new("a", "source", 0, info.DurationTicks)],
+                Speakers = [new("speaker-1", "Host")],
+                Speech = [new("speech", "source", middle, info.DurationTicks, "Split at this retained frame.",
+                    ["speaker-1"], "corrected")]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var at = session.Preview?.Info.SourceActual?.Ticks ?? throw new Exception("Expected a selected source frame.");
+            Assert(at > 0 && at < info.DurationTicks, "The selected speech frame was not strictly inside the clip.");
+
+            await session.SplitSelectedClipAsync();
+            Assert(session.Project.Timeline.Select(item => item.Id).SequenceEqual(["a", "a-2"]) &&
+                session.Project.Timeline[0].Out == at && session.Project.Timeline[1].In == at &&
+                session.SelectedClipId == "a-2", "Splitting at the selected frame did not divide the clip.");
+
+            var trimmed = info.DurationTicks - 1;
+            await session.TrimSelectedClipAsync(at, trimmed);
+            Assert(session.Project.Timeline[1].Out == trimmed, "The trim did not shorten the selected clip.");
+
+            await session.MoveSelectedClipAsync(-1);
+            Assert(session.Project.Timeline.Select(item => item.Id).SequenceEqual(["a-2", "a"]),
+                "Reordering did not move the selected clip earlier.");
+
+            for (var undone = 0; undone < 3; undone++) await session.UndoAsync();
+            var restored = await new ProjectStore().LoadAsync(projectPath);
+            Assert(restored.Revision == 7 && restored.Timeline.Length == 1 && restored.Timeline[0].Id == "a" &&
+                restored.Timeline[0].In == 0 && restored.Timeline[0].Out == info.DurationTicks &&
+                !session.CanUndo && session.CanRedo && session.Playback is null,
+                "Undoing the timeline edits did not restore the original clip in one revision each.");
+
+            for (var redone = 0; redone < 3; redone++) await session.RedoAsync();
+            var reapplied = await new ProjectStore().LoadAsync(projectPath);
+            Assert(reapplied.Revision == 10 && reapplied.Timeline.Select(item => item.Id).SequenceEqual(["a-2", "a"]) &&
+                reapplied.Timeline[0].In == at && reapplied.Timeline[0].Out == trimmed &&
+                reapplied.Timeline[1].Out == at && session.CanUndo && !session.CanRedo,
+                "Redoing the timeline edits did not reproduce the split, trim and order.");
+        });
+
+        await check("Supplied review proxy survives edits and reports that it is behind", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var previewPath = Path.Combine(root, "supplied-review.webm");
+            await File.WriteAllBytesAsync(previewPath, new byte[64]);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            session.UsePlaybackPreview(previewPath);
+            var supplied = session.Playback ?? throw new Exception("The supplied review proxy was not accepted.");
+            Assert(supplied.Path == previewPath && supplied.Revision == session.Project.Revision &&
+                session.PlaybackStatus.Contains("not validated export", StringComparison.Ordinal) &&
+                !session.PlaybackStatus.Contains("does not show edits", StringComparison.Ordinal),
+                "A current supplied proxy was not reported as an unvalidated render.");
+
+            await session.MoveSelectedClipAsync(1);
+            Assert(ReferenceEquals(session.Playback, supplied) &&
+                session.PlaybackStatus.Contains("does not show edits", StringComparison.Ordinal),
+                "An edit discarded the supplied review proxy instead of marking it behind.");
+
+            await session.PreparePlaybackAsync();
+            Assert(ReferenceEquals(session.Playback, supplied),
+                "Playback preparation replaced the supplied review proxy.");
+
+            await session.UndoAsync();
+            Assert(ReferenceEquals(session.Playback, supplied), "Undo discarded the supplied review proxy.");
+
+            await session.ReloadAsync();
+            Assert(ReferenceEquals(session.Playback, supplied) &&
+                session.PlaybackStatus.Contains("does not show edits", StringComparison.Ordinal),
+                "Reloading discarded the supplied review proxy.");
+
+            var empty = Path.Combine(root, "empty-review.webm");
+            await File.WriteAllBytesAsync(empty, []);
+            Throws<InvalidDataException>(() => session.UsePlaybackPreview(empty));
+            Throws<ArgumentException>(() => session.UsePlaybackPreview(projectPath));
+            Throws<FileNotFoundException>(() => session.UsePlaybackPreview(Path.Combine(root, "absent-review.webm")));
+            Assert(ReferenceEquals(session.Playback, supplied),
+                "A rejected review proxy replaced the accepted one.");
+        });
+
+        await check("Recent projects are ordered, bounded, deduplicated and damage tolerant", async () =>
+        {
+            var storePath = Path.Combine(root, "recent", "recent-projects.json");
+            var store = new RoughCut.Desktop.RecentProjects(storePath);
+            Assert(store.Load().Count == 0, "An absent history was not empty.");
+
+            var paths = new List<string>();
+            for (var index = 0; index < RoughCut.Desktop.RecentProjects.MaxEntries + 3; index++)
+            {
+                var path = Path.Combine(root, $"recent-{index}.json");
+                await File.WriteAllTextAsync(path, "{}");
+                paths.Add(path);
+                store.Record(path, $"project-{index}");
+            }
+            var loaded = store.Load();
+            Assert(loaded.Count == RoughCut.Desktop.RecentProjects.MaxEntries,
+                "The history was not bounded to its maximum entry count.");
+            Assert(loaded[0].Path == paths[^1] && loaded[0].ProjectId == $"project-{paths.Count - 1}",
+                "The most recently opened project was not first.");
+
+            store.Record(paths[^3], "project-reopened");
+            loaded = store.Load();
+            Assert(loaded[0].Path == paths[^3] && loaded.Count(item => item.Path == paths[^3]) == 1,
+                "Reopening a project did not move a single entry to the front.");
+
+            File.Delete(paths[^1]);
+            Assert(store.Load().All(item => item.Path != paths[^1]), "A deleted project stayed in the history.");
+            Assert(store.Forget(paths[^3]).All(item => item.Path != paths[^3]), "Forgetting a project did not remove it.");
+
+            await File.WriteAllTextAsync(storePath, "{ this is not json");
+            Assert(store.Load().Count == 0, "A damaged history was not tolerated.");
+            await File.WriteAllTextAsync(storePath, "{\"schemaVersion\":1,\"projects\":[]}");
+            Assert(store.Record(paths[0], "project-0").Count == 1, "The history did not recover after damage.");
+        });
+
+        await check("Launcher lists recent projects until one is open", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var storePath = Path.Combine(root, "launcher-recent.json");
+            new RoughCut.Desktop.RecentProjects(storePath).Record(projectPath, "desktop-timeline");
+            var launcherApp = new RoughCut.Desktop.RoughCutReviewApp(
+                null, null, new RoughCut.Desktop.RecentProjects(storePath));
+            using var launcher = launcherApp.CreateDocument();
+            launcher.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)launcherApp.Model;
+            Assert(model.LauncherClass == "" && model.WorkspaceClass == "hidden" && model.Recent.Length == 1 &&
+                model.Recent[0].Path == Path.GetFullPath(projectPath) &&
+                model.Recent[0].Name == "desktop-timeline-project.json" &&
+                model.Recent[0].ProjectId == "desktop-timeline",
+                "The launcher did not offer the recorded project while no project was open.");
+            Assert(launcher.DebugDump(1280, 800).Contains("desktop-timeline-project.json", StringComparison.Ordinal),
+                "The recent project was not rendered.");
+
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            var reviewApp = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var review = reviewApp.CreateDocument();
+            review.Refresh();
+            var opened = (RoughCut.Desktop.ReviewModel)reviewApp.Model;
+            Assert(opened.LauncherClass == "hidden" && opened.WorkspaceClass == "" &&
+                opened.ProjectTitle == "desktop-timeline-project.json",
+                "An opened project still showed the launcher.");
+        });
+
+        await check("New projects are created beside their video without overwriting", async () =>
+        {
+            var media = Path.Combine(root, "new-project-source.mkv");
+            File.Copy(Path.Combine(root, "export source.mkv"), media, overwrite: true);
+            var session = await RoughCut.Desktop.DesktopReviewSession.CreateAsync(media);
+
+            var expected = Path.Combine(root, "new-project-source.json");
+            Assert(session.ProjectPath == expected && File.Exists(expected),
+                "The project was not created beside its video with the video's name.");
+            var project = session.Project;
+            Assert(project.Revision == 1 && project.Assets.Length == 1 && project.Timeline.Length == 1,
+                "A new project did not start at revision 1 with one asset and one clip.");
+            var asset = project.Assets[0];
+            Assert(asset.Kind == "video" && asset.Path == "new-project-source.mkv" &&
+                RoughCut.Core.ProjectValidator.IsPortablePath(asset.Path) && asset.Duration > 0,
+                "The new project did not reference its video by a portable relative path.");
+            Assert(project.Timeline[0].In == 0 && project.Timeline[0].Out == asset.Duration,
+                "The first clip did not cover the whole source.");
+            Assert(RoughCut.Core.ProjectValidator.Validate(project).Length == 0, "The new project did not validate.");
+
+            // A second project for the same video must not overwrite the first.
+            var second = await RoughCut.Desktop.DesktopReviewSession.CreateAsync(media);
+            Assert(second.ProjectPath == Path.Combine(root, "new-project-source-2.json") && File.Exists(expected),
+                "Creating a second project overwrote or reused the first.");
+
+            await Throws<FileNotFoundException>(() =>
+                RoughCut.Desktop.DesktopReviewSession.CreateAsync(Path.Combine(root, "absent-source.mkv")));
+            await Throws<MediaToolException>(() =>
+                RoughCut.Desktop.DesktopReviewSession.CreateAsync(Path.Combine(root, "launcher-recent.json")));
+        });
+
+        await check("Native file picker opens a real dialog and reports cancellation", async () =>
+        {
+            Assert(RoughCut.Desktop.NativeFileDialog.Available == OperatingSystem.IsWindows() ||
+                OperatingSystem.IsLinux(), "File picker availability did not match the platform.");
+            if (!OperatingSystem.IsWindows() || !Environment.UserInteractive)
+                return; // A real dialog needs an interactive Windows desktop.
+
+            const string title = "RoughCut file dialog probe";
+            var workingDirectory = Environment.CurrentDirectory;
+            var filter = new RoughCut.Desktop.FileFilter("RoughCut projects", "json");
+            var opened = Task.Run(() => RoughCut.Desktop.NativeFileDialog.OpenFile(title, filter, root, 0));
+            var dialog = nint.Zero;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (DateTime.UtcNow < deadline && (dialog = FindDialog(title)) == 0) await Task.Delay(50);
+            var found = dialog != 0;
+            if (found) CloseDialog(dialog);
+            var selected = await opened.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert(found, "The Windows common dialog never appeared with the requested title.");
+            Assert(selected is null, "Cancelling the file dialog did not report an empty selection.");
+            // GetOpenFileName moves the process working directory; every later relative path depends on this.
+            Assert(Environment.CurrentDirectory == workingDirectory,
+                "The file dialog left the process working directory changed.");
         });
 
         await check("Desktop background work stays responsive and supersedes stale selections", async () =>
@@ -151,6 +373,20 @@ internal static class DesktopTests
                 "Desktop playback did not report decoded synchronized video and audio.");
         });
     }
+
+    // "#32770" is the Windows dialog window class; the probe drives a real dialog rather than mocking it.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static nint FindDialog(string title) => FindWindowW("#32770", title);
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void CloseDialog(nint dialog) => PostMessageW(dialog, 0x0010, 0, 0);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern nint FindWindowW(string? className, string? windowName);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool PostMessageW(nint window, uint message, nint wParam, nint lParam);
 
     private static float[] FindBox(System.Text.Json.JsonElement node, string cssClass)
     {

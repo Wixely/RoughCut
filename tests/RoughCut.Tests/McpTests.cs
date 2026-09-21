@@ -32,7 +32,7 @@ internal static class McpTests
                 "roughcut_save_analysis", "roughcut_apply_analysis",
                 "roughcut_save_diarization", "roughcut_diarize_local", "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
                 "roughcut_synthesize_voice", "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
-                "roughcut_import_image", "roughcut_acquire_url", "roughcut_preflight_export",
+                "roughcut_import_image", "roughcut_acquire_url", "roughcut_create_project_from_url", "roughcut_preflight_export",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
         });

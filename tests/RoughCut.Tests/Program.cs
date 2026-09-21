@@ -180,9 +180,23 @@ await Check("yt-dlp acquisition is bounded, staged and strips URL secrets from p
         result.Captions is [{ Language: "en", SourceKind: "manual", CueCount: 1 }] &&
         File.Exists(Path.Combine(testRoot, "acquired", "acquisition.json")) &&
         fake.DownloadArguments is not null && fake.DownloadArguments.Contains("--ignore-config") &&
-        fake.DownloadArguments.Contains("--no-js-runtimes") && fake.DownloadArguments.Contains("--no-remote-components") &&
+        fake.DownloadArguments.Contains("--no-remote-components") &&
         fake.DownloadArguments.Contains("--no-playlist") && fake.DownloadArguments[^2] == "--",
         "Acquisition safety policy or portable manifest is incorrect.");
+    // Clearing yt-dlp's default runtime would silently degrade YouTube formats; Node stays off because
+    // yt-dlp disables it by default, not because RoughCut clears every runtime.
+    var defaultArguments = fake.DownloadArguments!;
+    Assert(!defaultArguments.Contains("--no-js-runtimes") && !defaultArguments.Contains("--js-runtimes"),
+        "Acquisition cleared or overrode the default JavaScript runtime without being asked to.");
+    var pinned = new TestAcquisitionTool();
+    var denoStandIn = Path.Combine(testRoot, "deno-stand-in.exe");
+    await File.WriteAllBytesAsync(denoStandIn, [0]);
+    await new YtDlpAcquirer(new WorkspaceBoundary(testRoot), "fake-yt-dlp", pinned)
+        .AcquireAsync("https://example.test/pinned", "acquired-pinned", denoStandIn);
+    var pinnedArguments = pinned.DownloadArguments!;
+    Assert(pinnedArguments.Contains("--js-runtimes") &&
+        pinnedArguments[pinnedArguments.IndexOf("--js-runtimes") + 1] == "deno:" + denoStandIn,
+        "An explicitly supplied Deno path was not pinned for yt-dlp.");
     await Throws<ArgumentException>(() => new YtDlpAcquirer(new WorkspaceBoundary(testRoot), "fake", fake)
         .AcquireAsync("file:///private/video", "invalid-acquisition"));
     await Throws<OperationCanceledException>(() => new YtDlpAcquirer(new WorkspaceBoundary(testRoot), "fake", new TestAcquisitionTool())
@@ -497,6 +511,42 @@ if (args.Contains("--media", StringComparer.Ordinal))
             applied.Timeline[1].In == end && applied.Timeline[1].Out == info.DurationTicks,
             "Persisted analysis decision did not remove exactly the labelled interval.");
     });
+    await Check("URL projects fetch subtitles, create a project and select captions in one step", async () =>
+    {
+        var fake = new TestAcquisitionTool(source);
+        var operations = new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg,
+            Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe", "fake-yt-dlp", fake);
+        var result = await operations.CreateProjectFromUrlAsync("https://example.test/watch?v=private-token#fragment", "url-project");
+
+        // The subtitle and format policy must stay RoughCut's, not something a caller has to remember.
+        var arguments = fake.DownloadArguments ?? throw new Exception("Acquisition did not run.");
+        Assert(arguments.Contains("--write-subs") && arguments.Contains("--write-auto-subs") &&
+            arguments.Contains("--sub-langs") && arguments.Contains("en,-live_chat") &&
+            arguments.Contains("--convert-subs") && arguments.Contains("srt") &&
+            arguments.Contains("--no-playlist") && arguments.Contains("--ignore-config"),
+            "URL project acquisition did not request subtitles under the bounded yt-dlp policy.");
+
+        Assert(result.ProjectPath == Path.Combine(testRoot, "url-project", "project.json") &&
+            File.Exists(result.ProjectPath) && result.Acquisition.Source == "https://example.test/watch",
+            "The project was not created inside the acquired directory with redacted provenance.");
+        var project = result.Project;
+        Assert(project.Assets is [{ Kind: "video", Path: "source.mkv" }] && project.Timeline.Length == 1 &&
+            ProjectValidator.Validate(project).Length == 0,
+            "The URL project did not reference the downloaded media by a portable path.");
+        Assert(result.CaptionIssue is null && result.Captions is not null &&
+            project.Captions is { Language: "en", SourceKind: "manual", Selection: "recommended" } &&
+            project.Captions.Cues.Length == 1 && project.Revision == 2,
+            "Acquired subtitles were not assessed and recorded with provenance.");
+
+        // A source without subtitles still yields a usable project, with the reason reported.
+        var withoutCaptions = new TestAcquisitionTool(source) { OmitCaptions = true };
+        var bare = await new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg,
+            Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe", "fake-yt-dlp", withoutCaptions)
+            .CreateProjectFromUrlAsync("https://example.test/no-subs", "url-project-bare");
+        Assert(bare.Captions is null && bare.CaptionIssue is not null && bare.Project.Captions is null &&
+            bare.Project.Revision == 1 && ProjectValidator.Validate(bare.Project).Length == 0,
+            "A subtitle-free URL did not produce a valid project with a reported reason.");
+    });
     await Check("Local speech processing chunks bounded PCM and preserves timed provenance", async () =>
     {
         var audio = Path.Combine(testRoot, "speech.wav");
@@ -710,9 +760,11 @@ sealed class TestSpeechTranscriber : ILocalSpeechTranscriber
     }
 }
 
-sealed class TestAcquisitionTool : IAcquisitionTool
+// Supply a real media file to exercise the whole URL-to-project sequence without a download.
+sealed class TestAcquisitionTool(string? mediaFixture = null) : IAcquisitionTool
 {
     public IReadOnlyList<string>? DownloadArguments { get; private set; }
+    public bool OmitCaptions { get; init; }
 
     public async Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
@@ -720,11 +772,13 @@ sealed class TestAcquisitionTool : IAcquisitionTool
         DownloadArguments = arguments;
         var index = arguments.IndexOf("--paths");
         var staging = arguments[index + 1];
-        await File.WriteAllBytesAsync(Path.Combine(staging, "source.mkv"), "synthetic media"u8.ToArray(), cancellationToken);
+        if (mediaFixture is not null) File.Copy(mediaFixture, Path.Combine(staging, "source.mkv"));
+        else await File.WriteAllBytesAsync(Path.Combine(staging, "source.mkv"), "synthetic media"u8.ToArray(), cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(staging, "source.info.json"),
             "{\"id\":\"fixture-id\",\"title\":\"Fixture title\",\"extractor\":\"fixture\",\"subtitles\":{\"en\":[]}}", cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(staging, "source.en.srt"),
-            "1\n00:00:00,000 --> 00:00:01,000\nCaption\n", cancellationToken);
+        if (!OmitCaptions)
+            await File.WriteAllTextAsync(Path.Combine(staging, "source.en.srt"),
+                "1\n00:00:00,000 --> 00:00:01,000\nCaption\n", cancellationToken);
         return new([], "");
     }
 }

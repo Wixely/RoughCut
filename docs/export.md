@@ -45,6 +45,7 @@ The example operations require a source of at least three seconds, a project tim
 ```json
 [
   { "action": "trim", "clipId": "clip-1", "in": 100, "out": 900 },
+  { "action": "set-range", "clipId": "clip-1", "in": 0, "out": 1000 },
   { "action": "split", "clipId": "clip-1", "at": 500, "newClipId": "clip-2" },
   { "action": "reorder", "order": ["clip-2", "clip-1"] },
   { "action": "crop", "clipId": "clip-1", "crop": { "x": 0, "y": 0, "width": 80, "height": 48 } },
@@ -54,7 +55,7 @@ The example operations require a source of at least three seconds, a project tim
 ]
 ```
 
-Use `remove` with `clipId` to delete a clip, or `crop` with a null crop to clear it. `insert-image` requires an imported image asset, a new clip ID and a positive hold duration in project ticks; omit `beforeClipId` to append it. Its audio policy is fixed to silence. Reorder must list every remaining clip exactly once. Trim only shrinks the current interval. Use a saved prior project as a candidate with the next revision to restore an earlier edit; a dedicated undo-history UI is not implemented yet.
+Use `remove` with `clipId` to delete a clip, or `crop` with a null crop to clear it. `insert-image` requires an imported image asset, a new clip ID and a positive hold duration in project ticks; omit `beforeClipId` to append it. Its audio policy is fixed to silence. Reorder must list every remaining clip exactly once. Trim only shrinks the current interval. `set-range` replaces a clip's retained interval anywhere inside its source, so it can also restore material an earlier trim dropped; it keeps image holds starting at zero and never reaches past the asset duration. Use it when an interactive editor must reverse a trim, and keep `trim` where a batch must be unable to extend a clip. Use a saved prior project as a candidate with the next revision to restore an earlier edit; the desktop review host keeps its own session undo history.
 
 `preflight` prints a JSON plan and exits nonzero for unsupported requests. The plan includes the canonical project hash/revision, requested/resolved boundaries, frame/sample ranges, output mapping, dimensions and each stream's copy/encode reason. It verifies the used media and caption-source hashes. It does not trust a keyframe flag as proof of independent decoding.
 

@@ -12,6 +12,7 @@ public sealed class DesktopReviewSession
     private readonly Stack<ReviewChange> _undo = new();
     private readonly Stack<ReviewChange> _redo = new();
     private string _selectionLabel = "Timeline start";
+    private DesktopPlaybackProxy? _suppliedPreview;
 
     private DesktopReviewSession(string projectPath, RoughCutOperations operations, EditProject project)
     {
@@ -36,10 +37,70 @@ public sealed class DesktopReviewSession
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
 
+    /// Where projects downloaded from a URL are written. `ROUGHCUT_PROJECTS` overrides it.
+    public static string ProjectsRoot =>
+        Environment.GetEnvironmentVariable("ROUGHCUT_PROJECTS") is { Length: > 0 } configured
+            ? Path.GetFullPath(configured)
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RoughCut");
+
+    private static RoughCutOperations Operations(string directory) => new(new WorkspaceBoundary(directory),
+        Environment.GetEnvironmentVariable("ROUGHCUT_FFMPEG") ?? "ffmpeg",
+        Environment.GetEnvironmentVariable("ROUGHCUT_FFPROBE") ?? "ffprobe",
+        Environment.GetEnvironmentVariable("ROUGHCUT_YTDLP") ?? "yt-dlp");
+
+    /// Downloads one URL with its subtitles through the bounded yt-dlp policy, then creates and opens a
+    /// project for it. Each acquisition gets its own dated folder under the projects root.
+    public static async Task<DesktopReviewSession> CreateFromUrlAsync(string sourceUrl, CancellationToken token = default)
+    {
+        var root = ProjectsRoot;
+        Directory.CreateDirectory(root);
+        var destination = UnusedDirectory(root, DateTime.Now.ToString("yyyy-MM-dd-HHmmss",
+            System.Globalization.CultureInfo.InvariantCulture));
+        var result = await Operations(root).CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(destination),
+            Environment.GetEnvironmentVariable("ROUGHCUT_DENO"), token: token);
+        return await LoadAsync(result.ProjectPath, token);
+    }
+
+    private static string UnusedDirectory(string root, string name)
+    {
+        for (var suffix = 1; suffix <= 1000; suffix++)
+        {
+            var candidate = Path.Combine(root, suffix == 1 ? name :
+                name + "-" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
+        }
+        throw new IOException("Too many acquisitions already exist for that moment.");
+    }
+
+    /// Creates a project beside its video, because an asset must live inside the project directory
+    /// for its stored path to stay portable. Returns the session for the new project.
+    public static async Task<DesktopReviewSession> CreateAsync(string mediaPath, CancellationToken token = default)
+    {
+        mediaPath = Path.GetFullPath(mediaPath);
+        if (!File.Exists(mediaPath)) throw new FileNotFoundException("The chosen video does not exist.", mediaPath);
+        var directory = Path.GetDirectoryName(mediaPath)
+            ?? throw new ArgumentException("The chosen video has no containing directory.");
+        var projectPath = UnusedProjectPath(directory, Path.GetFileNameWithoutExtension(mediaPath));
+        await Operations(directory).CreateProjectAsync(Path.GetFileName(mediaPath), Path.GetFileName(projectPath), token);
+        return await LoadAsync(projectPath, token);
+    }
+
+    private static string UnusedProjectPath(string directory, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) name = "project";
+        for (var suffix = 1; suffix <= 1000; suffix++)
+        {
+            var candidate = Path.Combine(directory, suffix == 1 ? name + ".json" :
+                name + "-" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".json");
+            if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
+        }
+        throw new IOException("Too many projects already exist for that video name.");
+    }
+
     public static async Task<DesktopReviewSession> LoadAsync(string projectPath, CancellationToken token = default)
     {
         projectPath = Path.GetFullPath(projectPath);
-        var operations = new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(projectPath)!));
+        var operations = Operations(Path.GetDirectoryName(projectPath)!);
         var project = await operations.ReadProjectAsync(Path.GetFileName(projectPath), token);
         return new(projectPath, operations, project);
     }
@@ -54,6 +115,13 @@ public sealed class DesktopReviewSession
 
     public async Task PreparePlaybackAsync(CancellationToken token = default)
     {
+        // An explicitly supplied render is this session's playback: never replace it with a build that
+        // would fail for the very source it was supplied for.
+        if (_suppliedPreview is not null)
+        {
+            RestoreSuppliedPreview();
+            return;
+        }
         var revision = Project.Revision;
         Playback = null;
         PlaybackStatus = "Preparing synchronized playback…";
@@ -75,11 +143,7 @@ public sealed class DesktopReviewSession
         }
     }
 
-    public void PlaybackUnavailable(string message)
-    {
-        Playback = null;
-        PlaybackStatus = message;
-    }
+    public void PlaybackUnavailable(string message) => InvalidatePlayback(message);
 
     public void UsePlaybackPreview(string path)
     {
@@ -91,9 +155,19 @@ public sealed class DesktopReviewSession
         if (length is <= 0 or > MaxReviewProxyBytes)
             throw new InvalidDataException("Pre-rendered review proxy exceeds its 128 MiB bound or is empty.");
         var duration = ProjectValidator.MapTimeline(Project).LastOrDefault()?.OutputOut ?? 0;
-        Playback = new(path, "external-review-preview", Project.Revision,
+        _suppliedPreview = new(path, "external-review-preview", Project.Revision,
             duration * Project.TimeBase.Numerator / (double)Project.TimeBase.Denominator, length);
-        PlaybackStatus = $"Pre-rendered review proxy (not validated export) · {length / 1024d / 1024d:0.0} MiB";
+        RestoreSuppliedPreview();
+    }
+
+    // Edits and reloads keep the supplied render rather than clearing it, and say when it has fallen behind.
+    private void RestoreSuppliedPreview()
+    {
+        var preview = _suppliedPreview ?? throw new InvalidOperationException("No review proxy was supplied.");
+        Playback = preview;
+        PlaybackStatus = $"Pre-rendered review proxy (not validated export) · {preview.Length / 1024d / 1024d:0.0} MiB" +
+            (Project.Revision == preview.Revision ? "" :
+                $" · does not show edits since revision {preview.Revision}");
     }
 
     public double SelectedTimelineSeconds => Preview is null ? 0 :
@@ -146,35 +220,81 @@ public sealed class DesktopReviewSession
         await ApplyCropCoreAsync(clipId, crop, token);
         _undo.Push(new CropChange(clipId, clip.Crop, crop));
         _redo.Clear();
-        await RefreshAfterCropAsync(selected, token);
+        await RefreshAfterTimelineAsync(selected, token);
+    }
+
+    // Uses set-range rather than trim so the reviewer can restore retained source material and undo stays exact.
+    public async Task TrimSelectedClipAsync(long inTicks, long outTicks, CancellationToken token = default)
+    {
+        var clip = RequireSelectedVideoClip("trimmed");
+        var asset = Project.Assets.Single(item => item.Id == clip.AssetId);
+        if (inTicks < 0 || inTicks >= outTicks || outTicks > asset.Duration)
+            throw new InvalidOperationException("A trim must keep a nonempty interval inside the source.");
+        if (clip.In == inTicks && clip.Out == outTicks) return;
+        var selected = Preview?.Info;
+        await ApplyTimelineAsync([new("set-range", clip.Id, In: inTicks, Out: outTicks)], token);
+        _undo.Push(new RangeChange(clip.Id, clip.In, clip.Out, inTicks, outTicks));
+        _redo.Clear();
+        await RefreshAfterTimelineAsync(selected, token);
+    }
+
+    public async Task SplitSelectedClipAsync(CancellationToken token = default)
+    {
+        var clip = RequireSelectedVideoClip("split");
+        if (Preview?.Info.SourceActual is not { } source)
+            throw new InvalidOperationException("Select a source frame before splitting the clip.");
+        if (source.Ticks <= clip.In || source.Ticks >= clip.Out)
+            throw new InvalidOperationException("Splitting requires a frame strictly inside the selected clip.");
+        var newClipId = NextClipId(clip.Id);
+        var selected = Preview?.Info;
+        await ApplyTimelineAsync([new("split", clip.Id, At: source.Ticks, NewClipId: newClipId)], token);
+        _undo.Push(new SplitChange(clip.Id, clip.In, clip.Out, source.Ticks, newClipId));
+        _redo.Clear();
+        await RefreshAfterTimelineAsync(selected, token);
+    }
+
+    public async Task MoveSelectedClipAsync(int offset, CancellationToken token = default)
+    {
+        var clipId = SelectedClipId ?? throw new InvalidOperationException("Select a clip before reordering it.");
+        var before = Project.Timeline.Select(item => item.Id).ToArray();
+        var index = Array.IndexOf(before, clipId);
+        var target = checked(index + offset);
+        if (index < 0 || target < 0 || target >= before.Length)
+            throw new InvalidOperationException("The selected clip is already at that end of the timeline.");
+        var after = before.ToArray();
+        (after[index], after[target]) = (after[target], after[index]);
+        var selected = Preview?.Info;
+        await ApplyTimelineAsync([new("reorder", Order: after)], token);
+        _undo.Push(new OrderChange(before, after));
+        _redo.Clear();
+        await RefreshAfterTimelineAsync(selected, token);
     }
 
     public async Task UndoAsync(CancellationToken token = default)
     {
         if (!_undo.TryPeek(out var change)) return;
         var selected = Preview?.Info;
-        var cropChanged = await ApplyChangeAsync(change, forward: false, token);
+        var timelineChanged = await ApplyChangeAsync(change, forward: false, token);
         _undo.Pop();
         _redo.Push(change);
-        if (cropChanged) await RefreshAfterCropAsync(selected, token);
+        if (timelineChanged) await RefreshAfterTimelineAsync(selected, token);
     }
 
     public async Task RedoAsync(CancellationToken token = default)
     {
         if (!_redo.TryPeek(out var change)) return;
         var selected = Preview?.Info;
-        var cropChanged = await ApplyChangeAsync(change, forward: true, token);
+        var timelineChanged = await ApplyChangeAsync(change, forward: true, token);
         _redo.Pop();
         _undo.Push(change);
-        if (cropChanged) await RefreshAfterCropAsync(selected, token);
+        if (timelineChanged) await RefreshAfterTimelineAsync(selected, token);
     }
 
     public async Task ReloadAsync(CancellationToken token = default)
     {
         var selectedSegmentId = SelectedSegmentId;
         Project = await _operations.ReadProjectAsync(_projectName, token);
-        Playback = null;
-        PlaybackStatus = "Project reloaded · preparing current timeline playback";
+        InvalidatePlayback("Project reloaded · preparing current timeline playback");
         _undo.Clear();
         _redo.Clear();
         if (SelectedSpeakerId is not null && Project.Speakers.All(item => item.Id != SelectedSpeakerId))
@@ -219,17 +339,48 @@ public sealed class DesktopReviewSession
         _operations.ApplySpeakerEditsAsync(_projectName, Project.Revision,
             [new("rename", speakerId, Label: label, Reason: reason)], token);
 
-    private async Task ApplyCropCoreAsync(string clipId, Crop? crop, CancellationToken token)
+    private TimelineClip RequireSelectedVideoClip(string action)
     {
-        Project = await _operations.ApplyEditsAsync(_projectName, Project.Revision,
-            [new("crop", clipId, Crop: crop)], token);
-        Playback = null;
-        PlaybackStatus = "Timeline changed · rebuild playback to review the crop";
+        var clipId = SelectedClipId ?? throw new InvalidOperationException($"Select a video clip before it can be {action}.");
+        var clip = Project.Timeline.Single(item => item.Id == clipId);
+        if (Project.Assets.Single(item => item.Id == clip.AssetId).Kind != "video")
+            throw new InvalidOperationException($"Only video clips can be {action} in desktop review.");
+        return clip;
     }
 
-    private async Task RefreshAfterCropAsync(TimelineFrameInfo? selected, CancellationToken token)
+    private string NextClipId(string clipId)
     {
-        if (selected?.SourceActual is { } source)
+        for (var suffix = 2; suffix <= 1000; suffix++)
+        {
+            var candidate = clipId + "-" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (Project.Timeline.All(item => item.Id != candidate)) return candidate;
+        }
+        throw new InvalidOperationException("Too many timeline clips already derive from the selected clip ID.");
+    }
+
+    private Task ApplyCropCoreAsync(string clipId, Crop? crop, CancellationToken token) =>
+        ApplyTimelineAsync([new("crop", clipId, Crop: crop)], token);
+
+    private async Task ApplyTimelineAsync(EditOperation[] operations, CancellationToken token)
+    {
+        Project = await _operations.ApplyEditsAsync(_projectName, Project.Revision, operations, token);
+        InvalidatePlayback("Timeline changed · rebuild playback to review the edit");
+    }
+
+    private void InvalidatePlayback(string message)
+    {
+        if (_suppliedPreview is not null)
+        {
+            RestoreSuppliedPreview();
+            return;
+        }
+        Playback = null;
+        PlaybackStatus = message;
+    }
+
+    private async Task RefreshAfterTimelineAsync(TimelineFrameInfo? selected, CancellationToken token)
+    {
+        if (selected?.SourceActual is { } source && FindMapping(selected.AssetId, source.Ticks) is not null)
             await SelectSourceAsync(selected.AssetId, source.Ticks, _selectionLabel, token);
         else
             await InitializePreviewAsync(token);
@@ -246,6 +397,21 @@ public sealed class DesktopReviewSession
             case CropChange crop:
                 await ApplyCropCoreAsync(crop.ClipId, forward ? crop.After : crop.Before, token);
                 return true;
+            case RangeChange range:
+                await ApplyTimelineAsync([new("set-range", range.ClipId,
+                    In: forward ? range.AfterIn : range.BeforeIn,
+                    Out: forward ? range.AfterOut : range.BeforeOut)], token);
+                return true;
+            case SplitChange split:
+                // Undo joins the halves in one transactional batch, so the timeline never persists a partial split.
+                await ApplyTimelineAsync(forward
+                    ? [new("split", split.ClipId, At: split.At, NewClipId: split.NewClipId)]
+                    : [new("remove", split.NewClipId), new("set-range", split.ClipId, In: split.In, Out: split.Out)],
+                    token);
+                return true;
+            case OrderChange order:
+                await ApplyTimelineAsync([new("reorder", Order: forward ? order.After : order.Before)], token);
+                return true;
         }
         return false;
     }
@@ -253,4 +419,7 @@ public sealed class DesktopReviewSession
     private abstract record ReviewChange;
     private sealed record LabelChange(string SpeakerId, string Before, string After) : ReviewChange;
     private sealed record CropChange(string ClipId, Crop? Before, Crop? After) : ReviewChange;
+    private sealed record RangeChange(string ClipId, long BeforeIn, long BeforeOut, long AfterIn, long AfterOut) : ReviewChange;
+    private sealed record SplitChange(string ClipId, long In, long Out, long At, string NewClipId) : ReviewChange;
+    private sealed record OrderChange(string[] Before, string[] After) : ReviewChange;
 }

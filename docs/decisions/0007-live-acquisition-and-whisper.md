@@ -1,7 +1,7 @@
 # 0007: Adopt explicit Deno acquisition and timed Whisper.net local STT on Windows
 
 - Date: 2026-09-19
-- Status: Accepted for the bounded Windows MVP
+- Status: Accepted for the bounded Windows MVP; its `--no-js-runtimes` element is superseded by [0018](0018-default-javascript-runtime.md)
 - Supersedes: Provider-adoption deferral in [0006](0006-acquisition-caption-speech-boundary.md)
 - Review trigger: yt-dlp, Deno, Whisper.net/runtime or model update; Linux qualification; language expansion; NativeAOT speech evaluation; release dependency/license review
 

@@ -2,16 +2,43 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "RoughCut CLI",
+      "name": "▶ RoughCut",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "presentation": { "group": "1: App", "order": 1 }
+    },
+    {
+      "name": "RoughCut desktop: open a project",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
       "args": [
-        "help"
+        "review",
+        "${input:projectPath}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "1: App", "order": 2 }
+    },
+    {
+      "name": "RoughCut desktop: open a project with a pre-rendered preview",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
+      "args": [
+        "review",
+        "${input:projectPath}",
+        "${input:reviewProxyPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "1: App", "order": 3 }
     },
     {
       "name": "RoughCut contract checks",
@@ -20,136 +47,11 @@
       "preLaunchTask": "build",
       "program": "${workspaceFolder}/tests/RoughCut.Tests/bin/Debug/net10.0/RoughCut.Tests.dll",
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "2: Checks", "order": 1 }
     },
     {
-      "name": "RoughCut desktop review",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
-      "args": [
-        "review",
-        "${input:projectPath}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut desktop: review current fact cut",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
-      "args": [
-        "review",
-        "${workspaceFolder}/artifacts/user-tests/k_rrelqu_bk/project-v2.json",
-        "${workspaceFolder}/artifacts/user-tests/k_rrelqu_bk/edited-preview.webm"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: inspect video",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "inspect",
-        "${input:videoPath}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: extract frame",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "frame",
-        "${input:videoPath}",
-        "${input:timestamp}",
-        "${input:frameOutput}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: preview timeline frame",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "timeline-frame",
-        "${input:projectPath}",
-        "${input:expectedRevision}",
-        "${input:timestamp}",
-        "${input:timelineFrameOutput}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: create project",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "create",
-        "${input:videoPath}",
-        "${input:newProjectPath}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: validate project",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "validate",
-        "${input:projectPath}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: map timeline",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "map",
-        "${input:projectPath}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: save project revision",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "save",
-        "${input:candidatePath}",
-        "${input:projectPath}",
-        "${input:expectedRevision}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: media and CLI checks",
+      "name": "RoughCut: media, CLI, desktop and MCP checks",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
@@ -158,55 +60,30 @@
         "--media",
         "--cli",
         "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+        "--desktop",
+        "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
         "--mcp",
         "${workspaceFolder}/src/RoughCut.Mcp/bin/Debug/net10.0/roughcut-mcp.dll"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "2: Checks", "order": 2 }
     },
     {
-      "name": "RoughCut MCP (stdio)",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Mcp/bin/Debug/net10.0/roughcut-mcp.dll",
-      "args": [
-        "--workspace",
-        "${input:mcpWorkspace}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "internalConsole"
-    },
-    {
-      "name": "RoughCut: apply edit operations",
+      "name": "RoughCut: acquire URL",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": [
-        "edit",
-        "${input:projectPath}",
-        "${input:operationsPath}",
-        "${input:expectedRevision}"
+        "acquire",
+        "${input:sourceUrl}",
+        "${input:acquisitionDirectory}",
+        "${input:denoPath}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: import SRT captions",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "captions",
-        "${input:projectPath}",
-        "${input:assetId}",
-        "${input:captionPath}",
-        "${input:expectedRevision}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "3: Acquire and transcribe", "order": 1 }
     },
     {
       "name": "RoughCut: assess caption candidates",
@@ -223,22 +100,25 @@
         "${input:preferredLanguage}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "3: Acquire and transcribe", "order": 2 }
     },
     {
-      "name": "RoughCut: acquire URL",
+      "name": "RoughCut: import SRT captions",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": [
-        "acquire",
-        "${input:sourceUrl}",
-        "${input:acquisitionDirectory}",
-        "${input:denoPath}"
+        "captions",
+        "${input:projectPath}",
+        "${input:assetId}",
+        "${input:captionPath}",
+        "${input:expectedRevision}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "3: Acquire and transcribe", "order": 3 }
     },
     {
       "name": "RoughCut: prepare Whisper model",
@@ -251,38 +131,8 @@
         "${input:whisperModelPath}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: save analysis proposals",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "analyse",
-        "${input:projectPath}",
-        "${input:analysisSubmissionPath}",
-        "${input:expectedRevision}",
-        "${input:analysisPolicy}",
-        "${input:analysisPrompt}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: apply automatic analysis decisions",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": [
-        "analysis-apply",
-        "${input:projectPath}",
-        "${input:expectedRevision}"
-      ],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "3: Acquire and transcribe", "order": 4 }
     },
     {
       "name": "RoughCut: transcribe locally",
@@ -300,20 +150,41 @@
         "${input:transcriptionChunkSeconds}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "3: Acquire and transcribe", "order": 5 }
     },
     {
-      "name": "RoughCut: preflight export",
+      "name": "RoughCut: save analysis proposals",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": [
-        "preflight",
-        "${input:projectPath}"
+        "analyse",
+        "${input:projectPath}",
+        "${input:analysisSubmissionPath}",
+        "${input:expectedRevision}",
+        "${input:analysisPolicy}",
+        "${input:analysisPrompt}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "4: Analyse", "order": 1 }
+    },
+    {
+      "name": "RoughCut: apply automatic analysis decisions",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "analysis-apply",
+        "${input:projectPath}",
+        "${input:expectedRevision}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "4: Analyse", "order": 2 }
     },
     {
       "name": "RoughCut: edit speakers",
@@ -323,7 +194,8 @@
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": ["speaker-edit", "${input:projectPath}", "${input:speakerEditsPath}", "${input:expectedRevision}"],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 1 }
     },
     {
       "name": "RoughCut: save diarization",
@@ -333,7 +205,8 @@
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": ["diarization-save", "${input:projectPath}", "${input:diarizationSubmissionPath}", "${input:expectedRevision}"],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 2 }
     },
     {
       "name": "RoughCut: diarize locally with Sherpa",
@@ -351,7 +224,8 @@
         "${input:diarizationSpeakerCount}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 3 }
     },
     {
       "name": "RoughCut: plan voice replacement",
@@ -361,27 +235,8 @@
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": ["voice-plan", "${input:projectPath}", "${input:voicePlanPath}", "${input:expectedRevision}"],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: import voice preview",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": ["voice-preview-import", "${input:projectPath}", "${input:replacementId}", "${input:voicePreviewPath}", "${input:expectedRevision}", "${input:qwenRuntime}"],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "RoughCut: get voice preview",
-      "type": "coreclr",
-      "request": "launch",
-      "preLaunchTask": "build",
-      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
-      "args": ["voice-preview", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}", "${input:voicePreviewOutput}"],
-      "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 4 }
     },
     {
       "name": "RoughCut: synthesize voice with Qwen",
@@ -392,7 +247,30 @@
       "args": ["voice-synthesize", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}"],
       "env": { "ROUGHCUT_QWEN_ENDPOINT": "${input:qwenEndpoint}" },
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 5 }
+    },
+    {
+      "name": "RoughCut: import voice preview",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-preview-import", "${input:projectPath}", "${input:replacementId}", "${input:voicePreviewPath}", "${input:expectedRevision}", "${input:qwenRuntime}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 6 }
+    },
+    {
+      "name": "RoughCut: get voice preview",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": ["voice-preview", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}", "${input:voicePreviewOutput}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 7 }
     },
     {
       "name": "RoughCut: apply voice preview",
@@ -402,7 +280,86 @@
       "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
       "args": ["voice-state", "${input:projectPath}", "${input:expectedRevision}", "${input:replacementId}", "applied"],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "5: Speakers and voice", "order": 8 }
+    },
+    {
+      "name": "RoughCut: create project",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "create",
+        "${input:videoPath}",
+        "${input:newProjectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 1 }
+    },
+    {
+      "name": "RoughCut: apply edit operations",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "edit",
+        "${input:projectPath}",
+        "${input:operationsPath}",
+        "${input:expectedRevision}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 2 }
+    },
+    {
+      "name": "RoughCut: extract frame",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "frame",
+        "${input:videoPath}",
+        "${input:timestamp}",
+        "${input:frameOutput}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 3 }
+    },
+    {
+      "name": "RoughCut: preview timeline frame",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "timeline-frame",
+        "${input:projectPath}",
+        "${input:expectedRevision}",
+        "${input:timestamp}",
+        "${input:timelineFrameOutput}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 4 }
+    },
+    {
+      "name": "RoughCut: preflight export",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "preflight",
+        "${input:projectPath}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 5 }
     },
     {
       "name": "RoughCut: export without encoding",
@@ -416,7 +373,8 @@
         "${input:exportDirectory}"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 6 }
     },
     {
       "name": "RoughCut: export allowing encoding",
@@ -431,7 +389,35 @@
         "--allow-encode"
       ],
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "presentation": { "group": "6: Edit and export", "order": 7 }
+    },
+    {
+      "name": "RoughCut MCP (stdio)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Mcp/bin/Debug/net10.0/roughcut-mcp.dll",
+      "args": [
+        "--workspace",
+        "${input:mcpWorkspace}"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "7: Hosts", "order": 1 }
+    },
+    {
+      "name": "RoughCut CLI help",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Cli/bin/Debug/net10.0/roughcut.dll",
+      "args": [
+        "help"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "7: Hosts", "order": 2 }
     }
   ],
   "inputs": [
@@ -478,10 +464,10 @@
       "default": "artifacts/demo/project.json"
     },
     {
-      "id": "candidatePath",
+      "id": "reviewProxyPath",
       "type": "promptString",
-      "description": "Edited candidate JSON path (same project ID, revision advanced by one)",
-      "default": "artifacts/demo/candidate.json"
+      "description": "Pre-rendered WebM review proxy (not a validated RoughCut export)",
+      "default": "artifacts/demo/review.webm"
     },
     {
       "id": "expectedRevision",

@@ -63,6 +63,7 @@ public static class TimelineEditor
             string[] allowed = operation.Action switch
             {
                 "trim" => ["clipId", "in", "out"],
+                "set-range" => ["clipId", "in", "out"],
                 "split" => ["clipId", "at", "newClipId"],
                 "remove" => ["clipId"],
                 "reorder" => ["order"],
@@ -79,6 +80,16 @@ public static class TimelineEditor
                         start < clips[index].In || end > clips[index].Out || start >= end)
                         throw new ArgumentException("Trim must retain a nonempty interval inside the clip.");
                     clips[index] = clips[index] with { In = start, Out = end };
+                    break;
+                // Unlike trim this restores material inside the source, so an interactive trim is reversible.
+                case "set-range":
+                    var ranged = clips[index];
+                    var rangedAsset = project.Assets.Single(a => a.Id == ranged.AssetId);
+                    if (operation.In is not { } rangeIn || operation.Out is not { } rangeOut ||
+                        rangeIn < 0 || rangeIn >= rangeOut ||
+                        (rangedAsset.Kind == "video" ? rangeOut > rangedAsset.Duration : rangeIn != 0))
+                        throw new ArgumentException("Set-range must name a nonempty interval inside the source; image holds start at zero.");
+                    clips[index] = ranged with { In = rangeIn, Out = rangeOut };
                     break;
                 case "split":
                     var clip = clips[index];

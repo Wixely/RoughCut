@@ -36,7 +36,7 @@ internal static class ExportTests
             new("export-mode", Mode: "copy-only")
         ];
         const string srt = "1\n00:00:00,500 --> 00:00:01,500\nCrosses a removal\n\n2\n00:00:01,100 --> 00:00:01,800\nRemoved text\n\n3\n00:00:02,000 --> 00:00:02,700\nLater text\n";
-        await check("Edit batch applies split/remove/trim/reorder atomically", async () =>
+        await check("Edit batch applies split/remove/trim/reorder atomically; set-range restores source material", async () =>
         {
             var edited = TimelineEditor.Apply(project, operations);
             Assert(edited.Revision == 2 && edited.Timeline.Length == 2 && edited.Timeline[0].In == 2000 && edited.Timeline[0].Out == 3000, "Edit mapping incorrect.");
@@ -45,6 +45,13 @@ internal static class ExportTests
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(project, [new("reorder", Order: ["missing"])])));
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(project, [new("remove", "clip-1", Mode: "copy-only")])));
             Assert(project.Timeline.Length == 1, "Failed batch mutated the project.");
+            var restored = TimelineEditor.Apply(edited, [new("set-range", "later", In: 1000, Out: 4000)]);
+            Assert(restored.Timeline[0].In == 1000 && restored.Timeline[0].Out == 4000 && edited.Timeline[0].Out == 3000,
+                "Set-range did not restore retained source material without mutating the prior revision.");
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("trim", "later", In: 1000, Out: 4000)])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "later", In: 0, Out: 5000)])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "later", In: 2000, Out: 2000)])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "missing", In: 0, Out: 1)])));
         });
         await check("SRT import retains provenance; cuts split, drop and reorder cues", async () =>
         {

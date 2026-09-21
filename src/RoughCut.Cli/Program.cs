@@ -41,6 +41,7 @@ try
                   voice-preview <project.json> <expected-revision> <replacement-id> <new-output.wav>
                   voice-state <project.json> <expected-revision> <replacement-id> <applied|reverted>
                   acquire <url> <new-output-directory> [deno-executable]
+                  create-url <url> <new-output-directory> [deno-executable]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
 
@@ -252,6 +253,16 @@ try
                 };
                 await store.SaveAsync(destination, project, 0, token);
                 Console.WriteLine(JsonSerializer.Serialize(project, ProjectJson.Default.EditProject));
+                break;
+            }
+        case ["create-url", var sourceUrl, var destination, .. var urlOptions] when urlOptions.Length <= 1:
+            {
+                var fullDestination = Path.GetFullPath(destination);
+                var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
+                var operations = new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp);
+                var result = await operations.CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(fullDestination),
+                    urlOptions.FirstOrDefault(), token: token);
+                Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.UrlProjectResult));
                 break;
             }
         case ["frame", var path, var secondsText, var destination]:

@@ -5,8 +5,11 @@ using RoughCut.Media;
 
 namespace RoughCut.Application;
 
+public sealed record UrlProjectResult(string ProjectPath, AcquisitionResult Acquisition,
+    CaptionSelectionResult? Captions, string? CaptionIssue, EditProject Project);
+
 public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpeg = "ffmpeg", string ffprobe = "ffprobe",
-    string ytDlp = "yt-dlp")
+    string ytDlp = "yt-dlp", IAcquisitionTool? acquisitionTool = null)
 {
     private readonly ProjectStore _store = new();
     private readonly MediaReader _media = new(ffmpeg, ffprobe);
@@ -422,5 +425,35 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
 
     public Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
         string? denoPath = null, CancellationToken token = default)
-        => new YtDlpAcquirer(workspace, ytDlp).AcquireAsync(sourceUrl, destinationDirectory, denoPath, token);
+        => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool).AcquireAsync(sourceUrl, destinationDirectory, denoPath, token);
+
+    /// Acquires one URL with its subtitles, creates a project beside the downloaded media and selects the
+    /// best caption track. Keeps the whole URL-to-project sequence in one place so hosts cannot diverge.
+    public async Task<UrlProjectResult> CreateProjectFromUrlAsync(string sourceUrl, string destinationDirectory,
+        string? denoPath = null, string preferredLanguage = "en", CancellationToken token = default)
+    {
+        var acquisition = await AcquireAsync(sourceUrl, destinationDirectory, denoPath, token);
+        // The media must stay inside the project directory, so the project is written into the acquired folder.
+        var directory = workspace.Resolve(destinationDirectory);
+        var inner = new RoughCutOperations(new WorkspaceBoundary(directory), ffmpeg, ffprobe, ytDlp, acquisitionTool);
+        const string projectName = "project.json";
+        var project = await inner.CreateProjectAsync(acquisition.MediaPath, projectName, token);
+        if (acquisition.Captions.Length == 0)
+            return new(Path.Combine(directory, projectName), acquisition, null, "No subtitles were available.", project);
+        var candidates = acquisition.Captions
+            .Select(caption => new CaptionCandidate($"{caption.SourceKind}-{caption.Language}",
+                caption.Path, caption.SourceKind, caption.Language))
+            .ToArray();
+        try
+        {
+            var captions = await inner.SelectCaptionsAsync(projectName, project.Assets[0].Id, candidates,
+                project.Revision, preferredLanguage, token: token);
+            return new(Path.Combine(directory, projectName), acquisition, captions, null, captions.Project);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or ArgumentException)
+        {
+            // Unusable subtitles must not discard a perfectly good project; report instead of failing.
+            return new(Path.Combine(directory, projectName), acquisition, null, exception.Message, project);
+        }
+    }
 }

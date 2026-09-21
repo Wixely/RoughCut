@@ -6,16 +6,31 @@ using SkiaSharp;
 
 namespace RoughCut.Desktop;
 
-public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlaybackController? playback = null) : CupriApp
+public sealed class RoughCutReviewApp : CupriApp
 {
     private readonly ReviewModel _model = new();
     private readonly DesktopWorkCoordinator _work = new();
     private readonly Lock _playbackSync = new();
     private readonly SemaphoreSlim _playbackGate = new(1, 1);
+    private readonly DesktopPlaybackController? playback;
+    private readonly RecentProjects _recent;
+    private DesktopReviewSession? _session;
     private CupriDocument? _document;
     private CancellationTokenSource? _playbackCancellation;
     private long _playbackGeneration;
     private CropDragState? _cropDrag;
+
+    public RoughCutReviewApp(DesktopReviewSession? session = null,
+        DesktopPlaybackController? playback = null, RecentProjects? recent = null)
+    {
+        _session = session;
+        this.playback = playback;
+        _recent = recent ?? new RecentProjects();
+    }
+
+    // Review handlers only run while a project is open; a null session here would be a wiring mistake.
+    private DesktopReviewSession Session => _session ??
+        throw new InvalidOperationException("Open a project before reviewing it.");
 
     private sealed record CropDragState(CropDragMode Mode, Crop Start, float PointerX, float PointerY,
         int SourceWidth, int SourceHeight, double Scale);
@@ -46,50 +61,206 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         Rebuild();
         document.Refresh();
         document.OnClick(".speech-row", e => StartLatest(token =>
-            session.SelectSegmentAsync(Required(e, "data-id"), token), seekAfter: true));
+            Session.SelectSegmentAsync(Required(e, "data-id"), token), seekAfter: true));
         document.OnClick(".evidence-row", e => StartLatest(token =>
-            session.SelectEvidenceAsync(Required(e, "data-id"), token), seekAfter: true));
+            Session.SelectEvidenceAsync(Required(e, "data-id"), token), seekAfter: true));
         document.OnClick(".clip", e => StartLatest(token =>
-            session.SelectClipAsync(Required(e, "data-id"), token), seekAfter: true));
+            Session.SelectClipAsync(Required(e, "data-id"), token), seekAfter: true));
         document.OnClick(".speaker-row", e => StartCommand(() =>
         {
-            session.SelectSpeaker(Required(e, "data-id"));
+            Session.SelectSpeaker(Required(e, "data-id"));
             return Task.CompletedTask;
         }));
-        document.OnClick(".save-label", _ => StartCommand(() => session.RenameSelectedSpeakerAsync(_model.SelectedLabel)));
+        document.OnClick(".save-label", _ => StartCommand(() => Session.RenameSelectedSpeakerAsync(_model.SelectedLabel)));
         document.OnClick(".apply-crop", _ => StartCommand(ApplyCropAsync, seekAfter: true, rebuildPlayback: true));
         document.OnClick(".reset-crop", _ => StartCommand(ResetCropAsync, seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".apply-trim", _ => StartCommand(ApplyTrimAsync, seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".split-clip", _ => StartCommand(() => Session.SplitSelectedClipAsync(),
+            seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".move-earlier", _ => StartCommand(() => Session.MoveSelectedClipAsync(-1),
+            seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".move-later", _ => StartCommand(() => Session.MoveSelectedClipAsync(1),
+            seekAfter: true, rebuildPlayback: true));
         document.OnClick(".undo", _ => StartCommand(() => UndoRedoAsync(redo: false), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".redo", _ => StartCommand(() => UndoRedoAsync(redo: true), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
         document.OnPointer("data-crop-drag", HandleCropPointer);
-        if (session.Preview is null)
-            StartLatest(session.InitializePreviewAsync, seekAfter: true,
-                startPlaybackAfter: playback is not null && session.Playback is null);
-        else if (playback is not null && session.Playback is null)
+        document.OnClick(".recent-open", e => OpenProject(Required(e, "data-path")));
+        document.OnClick(".open-path", _ => OpenOrCreate(_model.OpenPath));
+        document.OnClick(".browse", _ => Browse(create: false));
+        document.OnClick(".new-project", _ => Browse(create: true));
+        document.OnClick(".new-url", _ => CreateFromUrl(_model.OpenUrl));
+        document.OnClick(".close-project", _ => ShowLauncher("Choose another project to review."));
+        document.OnFileDrop(drop =>
+        {
+            if (drop.Files.FirstOrDefault(file => !file.IsDirectory)?.Path is { } dropped) OpenOrCreate(dropped);
+        });
+        if (_session is null) ShowLauncher();
+        else StartReview();
+    }
+
+    private void StartReview()
+    {
+        if (Session.Preview is null)
+            StartLatest(Session.InitializePreviewAsync, seekAfter: true,
+                startPlaybackAfter: playback is not null && Session.Playback is null);
+        else if (playback is not null && Session.Playback is null)
             StartPlaybackPreparation();
     }
 
+    private void ShowLauncher(string? message = null)
+    {
+        CancelPlaybackPreparation();
+        _session = null;
+        _model.Recent = ToRecentRows(_recent.Load());
+        _model.RecentEmptyClass = _model.Recent.Length == 0 ? "" : "hidden";
+        _model.BrowseClass = NativeFileDialog.Available ? "" : "hidden";
+        _model.OpenMessage = message ?? (_model.Recent.Length == 0
+            ? "Paste a video URL, start from a local video, or drop a project or video file here."
+            : "Choose a recent project, paste a video URL, or drop a project or video file here.");
+        Rebuild(preserveStatus: true);
+        _document?.Refresh();
+    }
+
+    private static readonly FileFilter ProjectFilter = new("RoughCut projects", "json");
+    private static readonly FileFilter VideoFilter =
+        new("Video files", "mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m2ts", "ogv", "flv");
+
+    private void Browse(bool create)
+    {
+        // Read the owner window on the UI thread, then block only the dialog's own thread.
+        var owner = NativeFileDialog.ActiveWindow();
+        var start = _model.Recent.FirstOrDefault()?.Folder;
+        _model.OpenMessage = create ? "Choosing a video…" : "Choosing a project…";
+        _document?.Refresh();
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var chosen = create
+                    ? NativeFileDialog.OpenFile("Choose a video for a new RoughCut project", VideoFilter, start, owner)
+                    : NativeFileDialog.OpenFile("Open a RoughCut project", ProjectFilter, start, owner);
+                if (chosen is null) ShowLauncher();
+                else if (create) CreateProject(chosen);
+                else OpenProject(chosen);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or
+                IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
+            {
+                ShowLauncher(exception.Message);
+            }
+        });
+    }
+
+    // A project file is opened; anything else is treated as the video for a new project, so dropping
+    // or typing either kind does the obvious thing even where no native picker exists.
+    private void OpenOrCreate(string path)
+    {
+        path = Clean(path);
+        if (path.Length == 0)
+        {
+            _model.OpenMessage = "Enter a project or video path.";
+            _document?.Refresh();
+            return;
+        }
+        if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase)) OpenProject(path);
+        else CreateProject(path);
+    }
+
+    private void OpenProject(string projectPath) => Start("Opening project…",
+        "Finish the current operation before opening another project.", async () =>
+        {
+            var opened = await DesktopReviewSession.LoadAsync(Clean(projectPath));
+            _session = opened;
+            _recent.Record(opened.ProjectPath, opened.Project.ProjectId);
+        });
+
+    private void CreateFromUrl(string sourceUrl)
+    {
+        sourceUrl = Clean(sourceUrl);
+        if (sourceUrl.Length == 0)
+        {
+            _model.OpenMessage = "Enter a video URL to download.";
+            _document?.Refresh();
+            return;
+        }
+        Start("Downloading the video and its subtitles… this can take several minutes.",
+            "Finish the current operation before downloading a video.", async () =>
+            {
+                var created = await DesktopReviewSession.CreateFromUrlAsync(sourceUrl);
+                _session = created;
+                _recent.Record(created.ProjectPath, created.Project.ProjectId);
+            });
+    }
+
+    private void CreateProject(string mediaPath) => Start("Creating a project for that video…",
+        "Finish the current operation before creating a project.", async () =>
+        {
+            var created = await DesktopReviewSession.CreateAsync(Clean(mediaPath));
+            _session = created;
+            _recent.Record(created.ProjectPath, created.Project.ProjectId);
+        });
+
+    private void Start(string progress, string busy, Func<Task> action)
+    {
+        _model.OpenMessage = progress;
+        _model.Status = progress;
+        _document?.Refresh();
+        if (_work.StartCommand(action, exception =>
+        {
+            if (exception is null)
+            {
+                _model.LauncherClass = "hidden";
+                Complete(null, seekAfter: false);
+                StartReview();
+            }
+            else
+            {
+                _session = null;
+                _model.OpenMessage = exception.Message;
+                Complete(exception, seekAfter: false);
+            }
+        })) return;
+        _model.OpenMessage = busy;
+        _document?.Refresh();
+    }
+
+    private static string Clean(string? path) => path?.Trim().Trim('"') ?? "";
+
+    private static RecentRow[] ToRecentRows(IReadOnlyList<RecentProject> projects) =>
+        projects.Select(item => new RecentRow
+        {
+            Path = item.Path,
+            Name = Path.GetFileName(item.Path),
+            Folder = Path.GetDirectoryName(item.Path) ?? "",
+            ProjectId = item.ProjectId
+        }).ToArray();
+
     private async Task ReloadAsync()
     {
-        await session.ReloadAsync();
+        await Session.ReloadAsync();
     }
 
     private async Task ApplyCropAsync()
     {
-        await session.ApplyCropAsync(new(ParseCrop(_model.CropX, "X"), ParseCrop(_model.CropY, "Y"),
+        await Session.ApplyCropAsync(new(ParseCrop(_model.CropX, "X"), ParseCrop(_model.CropY, "Y"),
             ParseCrop(_model.CropWidth, "width"), ParseCrop(_model.CropHeight, "height")));
     }
 
     private async Task ResetCropAsync()
     {
-        await session.ApplyCropAsync(null);
+        await Session.ApplyCropAsync(null);
+    }
+
+    private async Task ApplyTrimAsync()
+    {
+        await Session.TrimSelectedClipAsync(ParseTicks(_model.TrimIn, "in"), ParseTicks(_model.TrimOut, "out"));
     }
 
     private async Task UndoRedoAsync(bool redo)
     {
-        if (redo) await session.RedoAsync();
-        else await session.UndoAsync();
+        if (redo) await Session.RedoAsync();
+        else await Session.UndoAsync();
     }
 
     private void StartLatest(Func<CancellationToken, Task> action, bool seekAfter = false,
@@ -145,7 +316,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
             {
                 await _playbackGate.WaitAsync(cancellation.Token);
                 entered = true;
-                await session.PreparePlaybackAsync(cancellation.Token);
+                await Session.PreparePlaybackAsync(cancellation.Token);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { canceled = true; }
             catch (Exception exception) { failure = exception; }
@@ -161,7 +332,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
             }
             cancellation.Dispose();
             if (canceled || !current) return;
-            if (failure is not null) session.PlaybackUnavailable(failure.Message);
+            if (failure is not null) Session.PlaybackUnavailable(failure.Message);
             Complete(failure, seekAfter: false);
         });
     }
@@ -181,7 +352,7 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         _model.Status = exception is null ? "Ready" : exception.Message;
         Rebuild(preserveStatus: true);
         _document?.Refresh();
-        if (exception is null && seekAfter) playback?.Seek(session.SelectedTimelineSeconds);
+        if (exception is null && seekAfter && _session is not null) playback?.Seek(Session.SelectedTimelineSeconds);
     }
 
     private bool HandleCropPointer(MultiPointerEvent pointer)
@@ -219,16 +390,22 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
             if (crop == drag.Start)
                 _model.Status = "Ready";
             else
-                StartCommand(() => session.ApplyCropAsync(crop), seekAfter: true, rebuildPlayback: true);
+                StartCommand(() => Session.ApplyCropAsync(crop), seekAfter: true, rebuildPlayback: true);
         }
         return true;
     }
 
     private bool TryCropContext(out MediaAsset asset, out Crop crop)
     {
-        var project = session.Project;
-        var clip = session.SelectedClipId is null ? null :
-            project.Timeline.FirstOrDefault(item => item.Id == session.SelectedClipId);
+        if (_session is null)
+        {
+            asset = null!;
+            crop = null!;
+            return false;
+        }
+        var project = Session.Project;
+        var clip = Session.SelectedClipId is null ? null :
+            project.Timeline.FirstOrDefault(item => item.Id == Session.SelectedClipId);
         asset = clip is null ? null! : project.Assets.FirstOrDefault(item => item.Id == clip.AssetId)!;
         if (clip is null || asset is null || asset.Kind != "video")
         {
@@ -266,19 +443,28 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
 
     private void Rebuild(bool preserveStatus = false)
     {
-        var project = session.Project;
-        _model.ProjectTitle = Path.GetFileName(session.ProjectPath);
+        _model.LauncherClass = _session is null ? "" : "hidden";
+        _model.WorkspaceClass = _session is null ? "hidden" : "";
+        if (_session is null)
+        {
+            _model.ProjectTitle = "No project open";
+            _model.Revision = "—";
+            if (!preserveStatus) _model.Status = "Ready";
+            return;
+        }
+        var project = Session.Project;
+        _model.ProjectTitle = Path.GetFileName(Session.ProjectPath);
         _model.Revision = project.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        _model.PreviewDataUri = session.Preview is null ? "" :
-            "data:image/png;base64," + Convert.ToBase64String(session.Preview.Png);
-        _model.PlaybackUri = session.Playback is null ? "" : new Uri(session.Playback.Path).AbsoluteUri;
-        _model.PlaybackStatus = session.PlaybackStatus;
-        _model.SourcePreviewDataUri = session.SourcePreview is null ? "" :
-            "data:image/png;base64," + Convert.ToBase64String(session.SourcePreview.Png);
-        _model.Selection = session.Selection;
-        _model.Crop = session.Crop;
-        var selectedClip = session.SelectedClipId is null ? null :
-            project.Timeline.Single(item => item.Id == session.SelectedClipId);
+        _model.PreviewDataUri = Session.Preview is null ? "" :
+            "data:image/png;base64," + Convert.ToBase64String(Session.Preview.Png);
+        _model.PlaybackUri = Session.Playback is null ? "" : new Uri(Session.Playback.Path).AbsoluteUri;
+        _model.PlaybackStatus = Session.PlaybackStatus;
+        _model.SourcePreviewDataUri = Session.SourcePreview is null ? "" :
+            "data:image/png;base64," + Convert.ToBase64String(Session.SourcePreview.Png);
+        _model.Selection = Session.Selection;
+        _model.Crop = Session.Crop;
+        var selectedClip = Session.SelectedClipId is null ? null :
+            project.Timeline.Single(item => item.Id == Session.SelectedClipId);
         var selectedAsset = selectedClip is null ? null : project.Assets.Single(item => item.Id == selectedClip.AssetId);
         var editable = selectedClip is not null && selectedAsset?.Kind == "video";
         var crop = editable ? selectedClip!.Crop ?? new Crop(0, 0, selectedAsset!.Width, selectedAsset.Height) : new(0, 0, 1, 1);
@@ -289,13 +475,29 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         _model.CropHeight = crop.Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _model.CropCanvasStyle = editable ? CanvasStyle(selectedAsset!) : "";
         _model.CropBoxStyle = editable ? CropBoxStyle(crop, selectedAsset!) : "";
+        var clipIndex = selectedClip is null ? -1 : Array.FindIndex(project.Timeline, item => item.Id == selectedClip.Id);
+        _model.ClipEditorClass = selectedClip is null ? "hidden" : "";
+        _model.ClipSummary = selectedClip is null ? "" : FormattableString.Invariant(
+            $"{selectedClip.Id} · clip {clipIndex + 1} of {project.Timeline.Length} · source {selectedClip.In}–{selectedClip.Out}");
+        _model.TrimIn = (selectedClip?.In ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.TrimOut = (selectedClip?.Out ?? 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        // Only offer edits the current selection can actually apply, so no click spends a revision on a rejection.
+        var splitAt = selectedClip is not null && selectedAsset?.Kind == "video" &&
+            Session.Preview?.Info.SourceActual is { } source && source.Ticks > selectedClip.In &&
+            source.Ticks < selectedClip.Out ? source.Ticks : (long?)null;
+        _model.SplitClass = splitAt is null ? "hidden" : "";
+        _model.SplitSummary = splitAt is { } tick
+            ? FormattableString.Invariant($"Split at source tick {tick}")
+            : "Select an interior source frame to split this clip";
+        _model.MoveEarlierClass = clipIndex > 0 ? "" : "hidden";
+        _model.MoveLaterClass = clipIndex >= 0 && clipIndex < project.Timeline.Length - 1 ? "" : "hidden";
         _model.Speakers = project.Speakers.Select(item => new SpeakerRow
         {
             Id = item.Id,
             Label = item.Label,
-            CssClass = item.Id == session.SelectedSpeakerId ? "selected" : ""
+            CssClass = item.Id == Session.SelectedSpeakerId ? "selected" : ""
         }).ToArray();
-        _model.SelectedLabel = project.Speakers.FirstOrDefault(item => item.Id == session.SelectedSpeakerId)?.Label ?? "";
+        _model.SelectedLabel = project.Speakers.FirstOrDefault(item => item.Id == Session.SelectedSpeakerId)?.Label ?? "";
         _model.Segments = project.Speech.Take(500).Select(item => new SpeechRow
         {
             Id = item.Id,
@@ -304,14 +506,14 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
                 project.Speakers.FirstOrDefault(speaker => speaker.Id == id)?.Label ?? id)),
             Text = item.Text,
             Badge = item.Overlap ? "overlap" : item.Assignment,
-            CssClass = item.Id == session.SelectedSegmentId ? "selected" : ""
+            CssClass = item.Id == Session.SelectedSegmentId ? "selected" : ""
         }).ToArray();
         _model.Clips = ProjectValidator.MapTimeline(project).Take(200).Select(item => new ClipRow
         {
             Id = item.ClipId,
             Range = $"{FormatTime(item.OutputIn, project.TimeBase)}–{FormatTime(item.OutputOut, project.TimeBase)}",
             Source = item.AssetId,
-            CssClass = item.ClipId == session.SelectedClipId ? "selected" : ""
+            CssClass = item.ClipId == Session.SelectedClipId ? "selected" : ""
         }).ToArray();
         _model.Evidence = project.Proposals.Take(100).Select(proposal =>
         {
@@ -328,6 +530,10 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
     private static int ParseCrop(string value, string field) =>
         int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture,
             out var parsed) ? parsed : throw new ArgumentException($"Crop {field} must be a whole number.");
+
+    private static long ParseTicks(string value, string field) =>
+        long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed) ? parsed : throw new ArgumentException($"Trim {field} must be a whole number of project ticks.");
 
     private static string CanvasStyle(MediaAsset asset)
     {
@@ -353,9 +559,20 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
           <main class="shell">
             <header class="topbar">
               <div><div class="brand">ROUGH<span>CUT</span></div><div class="project">{{ProjectTitle}} · revision {{Revision}}</div></div>
-              <div class="actions"><span class="status"><span class="status-dot"></span>{{Status}}</span><cupri-button class="reload" variant="ghost">Reload</cupri-button><cupri-button class="undo">Undo</cupri-button><cupri-button class="redo">Redo</cupri-button></div>
+              <div class="actions"><span class="status"><span class="status-dot"></span>{{Status}}</span><cupri-button class="close-project {{WorkspaceClass}}" variant="ghost">Open another</cupri-button><cupri-button class="reload {{WorkspaceClass}}" variant="ghost">Reload</cupri-button><cupri-button class="undo {{WorkspaceClass}}">Undo</cupri-button><cupri-button class="redo {{WorkspaceClass}}">Redo</cupri-button></div>
             </header>
-            <section class="workspace">
+            <section class="launcher {{LauncherClass}}">
+              <div class="launcher-card">
+                <div class="launcher-title">Open or create a project</div>
+                <div class="launcher-hint">{{OpenMessage}}</div>
+                <div class="recent-empty {{RecentEmptyClass}}">No projects opened yet on this computer.</div>
+                <div class="recent-list"><button class="recent-open" data-repeat="Recent" data-path="{{Path}}"><strong>{{Name}}</strong><span>{{Folder}}</span><small>{{ProjectId}}</small></button></div>
+                <div class="launcher-url"><cupri-textfield value="{{OpenUrl}}" placeholder="https://… video URL, downloaded with its subtitles"></cupri-textfield><cupri-button class="new-url">Fetch</cupri-button></div>
+                <div class="launcher-actions {{BrowseClass}}"><cupri-button class="new-project" variant="ghost">New from a local video…</cupri-button><cupri-button class="browse" variant="ghost">Open a project…</cupri-button></div>
+                <div class="launcher-open"><cupri-textfield value="{{OpenPath}}" placeholder="Path to a project.json or a video"></cupri-textfield><cupri-button class="open-path" variant="ghost">Go</cupri-button></div>
+              </div>
+            </section>
+            <section class="workspace {{WorkspaceClass}}">
               <div class="stage-column">
                 <div class="preview-card">
                   <div class="preview"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="contain" controls label="Project timeline playback"></cupri-video></div>
@@ -364,6 +581,10 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
                 <div class="timeline-card">
                   <div class="section-title">Timeline</div>
                   <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></button></div>
+                  <div class="clip-editor {{ClipEditorClass}}">
+                    <div class="clip-summary">{{ClipSummary}} · {{SplitSummary}}</div>
+                    <div class="clip-controls"><label><span>IN</span><cupri-textfield value="{{TrimIn}}"></cupri-textfield></label><label><span>OUT</span><cupri-textfield value="{{TrimOut}}"></cupri-textfield></label><div class="clip-actions"><cupri-button class="apply-trim">Apply trim</cupri-button><cupri-button class="split-clip {{SplitClass}}" variant="ghost">Split</cupri-button><cupri-button class="move-earlier {{MoveEarlierClass}}" variant="ghost">Earlier</cupri-button><cupri-button class="move-later {{MoveLaterClass}}" variant="ghost">Later</cupri-button></div></div>
+                  </div>
                 </div>
                 <div class="evidence-card">
                   <div class="section-title">Editorial evidence</div>
@@ -399,7 +620,20 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         .project { color:var(--muted); font-size:12px; margin-top:5px; } .actions { display:flex; gap:8px; align-items:center; }
         .status { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:11px; margin-right:8px; }
         .workspace { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; padding:14px; }
-        .stage-column { min-width:0; display:grid; grid-template-rows:minmax(350px,1fr) 118px 130px; gap:14px; }
+        .workspace.hidden,.launcher.hidden,.actions .hidden,.recent-empty.hidden { display:none; }
+        .launcher { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:24px; }
+        .launcher-card { width:660px; height:470px; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 18px 16px; }
+        .launcher-title { font-size:17px; font-weight:bold; }
+        .launcher-hint { color:var(--muted); font-size:12px; margin:6px 0 10px; }
+        .recent-empty { color:var(--muted); font-size:12px; padding:8px 0; }
+        .recent-list { flex:1; min-height:0; overflow-y:auto; }
+        .recent-open { display:flex; flex-direction:column; gap:2px; width:100%; box-sizing:border-box; margin-bottom:6px; padding:9px 11px; border:0; border-left:3px solid var(--accent); border-radius:7px; background:var(--panel2); text-align:left; cursor:pointer; }
+        .recent-open:hover { background:#263249; }
+        .recent-open span,.recent-open small { color:var(--muted); font-size:10px; }
+        .launcher-url { display:grid; grid-template-columns:minmax(0,1fr) 96px; gap:8px; align-items:center; padding-top:12px; margin-top:8px; border-top:1px solid var(--line); }
+        .launcher-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:8px; } .launcher-actions.hidden { display:none; }
+        .launcher-open { display:grid; grid-template-columns:minmax(0,1fr) 72px; gap:8px; align-items:center; padding-top:8px; }
+        .stage-column { min-width:0; display:grid; grid-template-rows:minmax(300px,1fr) 190px 130px; gap:14px; }
         .preview-card,.timeline-card,.evidence-card,.review-panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
         .preview-card { min-height:350px; padding:12px; display:flex; flex-direction:column; }
         .preview { flex:1; min-height:300px; display:flex; align-items:center; justify-content:center; background:#05070b; border-radius:8px; overflow:hidden; }
@@ -414,6 +648,11 @@ public sealed class RoughCutReviewApp(DesktopReviewSession session, DesktopPlayb
         button { color:inherit; font:inherit; } .evidence-row,.speaker-row,.speech-row { width:100%; border:0; text-align:left; cursor:pointer; }
         .evidence-row { display:flex; gap:8px; padding:7px 14px; background:transparent; } .decision { color:var(--accent); font-weight:bold; text-transform:uppercase; font-size:10px; }
         .review-panel { min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+        .clip-editor.hidden { display:none; }
+        .clip-summary { color:var(--muted); font-size:10px; padding:2px 12px 5px; }
+        .clip-controls { display:grid; grid-template-columns:200px 200px 1fr; gap:8px; align-items:end; padding:0 12px 10px; }
+        .clip-controls label span { display:block; color:var(--muted); font-size:9px; margin-bottom:2px; }
+        .clip-actions { display:flex; gap:6px; justify-content:flex-end; } .clip-actions .hidden { display:none; }
         .crop-editor { padding-bottom:10px; border-bottom:1px solid var(--line); } .crop-editor.hidden { display:none; }
         .crop-canvas { position:relative; margin:0 auto 8px; background:#05070b; overflow:hidden; }
         .crop-canvas cupri-image { width:100%; height:100%; } .crop-box { position:absolute; box-sizing:border-box; border:2px solid var(--accent); background:#ff9f4322; cursor:move; }
@@ -446,7 +685,23 @@ public sealed partial class ReviewModel
     public string SourcePreviewDataUri { get; set; } = "";
     public string Selection { get; set; } = "";
     public string Crop { get; set; } = "";
+    public string LauncherClass { get; set; } = "hidden";
+    public string WorkspaceClass { get; set; } = "";
+    public string RecentEmptyClass { get; set; } = "hidden";
+    public string BrowseClass { get; set; } = "hidden";
+    public string OpenMessage { get; set; } = "";
+    public string OpenPath { get; set; } = "";
+    public string OpenUrl { get; set; } = "";
+    public RecentRow[] Recent { get; set; } = [];
     public string CropEditorClass { get; set; } = "hidden";
+    public string ClipEditorClass { get; set; } = "hidden";
+    public string ClipSummary { get; set; } = "";
+    public string SplitSummary { get; set; } = "";
+    public string SplitClass { get; set; } = "hidden";
+    public string MoveEarlierClass { get; set; } = "hidden";
+    public string MoveLaterClass { get; set; } = "hidden";
+    public string TrimIn { get; set; } = "0";
+    public string TrimOut { get; set; } = "1";
     public string CropX { get; set; } = "0";
     public string CropY { get; set; } = "0";
     public string CropWidth { get; set; } = "1";
@@ -462,6 +717,7 @@ public sealed partial class ReviewModel
     public EvidenceRow[] Evidence { get; set; } = [];
 }
 
+[CupriBindable] public sealed partial class RecentRow { public string Path { get; set; } = ""; public string Name { get; set; } = ""; public string Folder { get; set; } = ""; public string ProjectId { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeakerRow { public string Id { get; set; } = ""; public string Label { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeechRow { public string Id { get; set; } = ""; public string Time { get; set; } = ""; public string Speaker { get; set; } = ""; public string Text { get; set; } = ""; public string Badge { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; public string CssClass { get; set; } = ""; }
