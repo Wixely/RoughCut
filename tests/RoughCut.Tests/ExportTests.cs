@@ -17,6 +17,13 @@ internal static class ExportTests
         throw new Exception($"Expected {typeof(T).Name}.");
     }
 
+    private static async Task<string> SaveAsync(ProjectStore store, string root, string name, EditProject project)
+    {
+        var path = Path.Combine(root, name);
+        await store.SaveAsync(path, project, 0);
+        return path;
+    }
+
     public static async Task RunAsync(Func<string, Func<Task>, Task> check, string[] args, string root)
     {
         var project = new EditProject
@@ -209,6 +216,8 @@ internal static class ExportTests
             var strict = await planner.PreflightAsync(voiceProject with { ExportMode = "copy-only" }, path);
             Assert(!strict.Supported && strict.Issues.Any(issue => issue.Code == "unsupported-copy-only"),
                 "Strict copy-only accepted replacement rendering.");
+            Assert(DeliveryExporter.Plan(voiceProject, path).Issues.Single().Code == "unsupported-replacements",
+                "Delivery silently dropped an applied voice replacement instead of refusing it.");
             var partial = voiceProject with { Timeline = [new("partial", "source-1", 500, 1000)] };
             Assert((await planner.PreflightAsync(partial, path)).Issues.Any(issue => issue.Code == "unsupported-voice-edit"),
                 "A partially retained voice interval was rendered.");
@@ -313,6 +322,104 @@ internal static class ExportTests
             var report = await exporter.ExportAsync(path, Path.Combine(root, "h264 result"), allowEncoding: true);
             Assert(report.Plan.Streams[0].Action == "encode" && report.Validation.DecodedFrames == 20, "Encoded H.264 cut failed validation.");
         });
+        await check("Delivery renders a timeline the strict matrix refuses, in order and at the claimed length", async () =>
+        {
+            // H.264 video with AAC audio in MP4: ordinary acquired material, outside the validated copy matrix.
+            var deliverySource = Path.Combine(root, "delivery source.mp4");
+            await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", source, "-map", "0:v:0", "-map", "0:a:0",
+                "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-threads:v", "1", "-c:a", "aac", "-b:a", "128k", "-n", deliverySource]);
+            var delivered = project with
+            {
+                ProjectId = "delivery",
+                Revision = 1,
+                Assets = [project.Assets[0] with { Path = "delivery source.mp4", MediaType = "video/mp4", Sha256 = await MediaReader.FingerprintAsync(deliverySource) }]
+            };
+            var path = Path.Combine(root, "delivery-project.json");
+            await store.SaveAsync(path, delivered, 0);
+            var strict = await planner.PreflightAsync(delivered, path);
+            Assert(!strict.Supported, "The strict path accepted AAC audio it cannot prove it copied.");
+            var plan = DeliveryExporter.Plan(delivered, path);
+            Assert(plan.Supported && plan.Width == 160 && plan.Height == 96 && plan.Duration == 2000 &&
+                plan.Clips.Select(clip => clip.ClipId).SequenceEqual(new[] { "later", "clip-1" }), "Delivery preflight mapped the timeline incorrectly.");
+            var before = await MediaReader.FingerprintAsync(deliverySource);
+            var destination = Path.Combine(root, "delivery result");
+            var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination);
+            var output = Path.Combine(destination, "video.mp4");
+            Assert(report.ExpectedSeconds == 2 && Math.Abs(report.ActualSeconds - 2) <= 0.05 && report.SilencedAssets.Length == 0 &&
+                report.OutputSha256 == await MediaReader.FingerprintAsync(output) && report.OutputBytes == new FileInfo(output).Length,
+                "Delivery report does not describe the published file.");
+            Assert(Directory.EnumerateFiles(destination).Count() == 3 && File.Exists(Path.Combine(destination, "captions.srt")) &&
+                report.Captions.Length == 2, "Delivery bundle is incomplete or retained intermediate files.");
+            Assert(await MediaReader.FingerprintAsync(deliverySource) == before, "Delivery modified its source.");
+            // Independent oracle: the visible binary frame IDs survive the encode and prove the cut and the order.
+            var pixels = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", output,
+                "-map", "0:v:0", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]);
+            Assert(pixels.Output.Length == 20 * 160 * 96 * 3, "Delivered file does not hold the twenty retained frames.");
+            for (int frame = 0; frame < 20; frame++)
+            {
+                int identifier = 0;
+                for (int bit = 0; bit < 6; bit++)
+                {
+                    int pixel = frame * 160 * 96 * 3 + (4 * 160 + bit * 16 + 4) * 3;
+                    if (pixels.Output[pixel] > 128) identifier |= 1 << bit;
+                }
+                Assert(identifier == (frame < 10 ? frame + 20 : frame - 10), "Delivered frames are in the wrong order or come from the wrong interval.");
+            }
+            await Throws<IOException>(() => new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination));
+            var changed = Path.Combine(root, "delivery-changed.json");
+            await store.SaveAsync(changed, delivered with { ProjectId = "delivery-changed", Assets = [delivered.Assets[0] with { Sha256 = new string('0', 64) }] }, 0);
+            await Throws<InvalidDataException>(() => new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(changed, Path.Combine(root, "delivery changed result")));
+            Assert(!Directory.Exists(Path.Combine(root, "delivery changed result")) &&
+                !Directory.EnumerateDirectories(root, ".roughcut-delivery-*").Any(), "A rejected delivery left a published or staged output.");
+        });
+        await check("Delivery crops, silences and refuses what it cannot render faithfully", async () =>
+        {
+            var deliverySource = Path.Combine(root, "delivery source.mp4");
+            var asset = new MediaAsset("source-1", "video", "delivery source.mp4",
+                await MediaReader.FingerprintAsync(deliverySource), 4000, 160, 96, "video/mp4");
+            var cropped = new EditProject
+            {
+                ProjectId = "delivery-crop",
+                TimeBase = new(1, 1000),
+                Assets = [asset],
+                Timeline = [new("cropped", "source-1", 1000, 2000, new(8, 4, 81, 48)), new("silent", "source-1", 2000, 3000, Audio: "silence")]
+            };
+            var path = Path.Combine(root, "delivery-crop-project.json");
+            await store.SaveAsync(path, cropped, 0);
+            var destination = Path.Combine(root, "delivery crop result");
+            var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination);
+            // An odd crop width cannot be encoded as H.264; delivery rounds it down rather than inventing a column.
+            Assert(report.Plan.Width == 80 && report.Plan.Height == 48 && report.Captions.Length == 0 &&
+                !File.Exists(Path.Combine(destination, "captions.srt")), "Delivery did not fit the timeline to an encodable frame.");
+            var probe = await ToolProcess.RunAsync(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                "-of", "csv=p=0", "-i", Path.Combine(destination, "video.mp4")]);
+            Assert(Encoding.UTF8.GetString(probe.Output).Trim() == "80,48", "Delivered frame size differs from the plan.");
+            var pcm = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", Path.Combine(destination, "video.mp4"),
+                "-map", "0:a:0", "-f", "s16le", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "pipe:1"]);
+            // Lossy audio never decodes to exact zeroes, so silence is judged by peak amplitude, not equality.
+            int Peak(ReadOnlySpan<byte> samples)
+            {
+                var peak = 0;
+                for (var offset = 0; offset + 1 < samples.Length; offset += 2)
+                    peak = Math.Max(peak, Math.Abs((int)System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(samples[offset..])));
+                return peak;
+            }
+            Assert(Peak(pcm.Output.AsSpan(0, 96000)) > 2000 && Peak(pcm.Output.AsSpan(280000)) < 256,
+                "A clip asking for silence did not deliver silence, or source audio was lost.");
+            var image = cropped with
+            {
+                ProjectId = "delivery-image",
+                Assets = [asset, new("still", "image", "inserted.png", new string('c', 64), 0, 80, 96, "image/png")],
+                Timeline = [new("hold", "still", 0, 1000, Audio: "silence")]
+            };
+            Assert(DeliveryExporter.Plan(image, path).Issues.Single().Code == "unsupported-timeline", "Delivery silently omitted a timed image.");
+            var missing = cropped with { ProjectId = "delivery-missing", Assets = [asset with { Path = "absent.mp4" }] };
+            Assert(DeliveryExporter.Plan(missing, path).Issues.Single().Code == "missing-media", "Delivery accepted missing media.");
+            var imagePath = await SaveAsync(store, root, "delivery-image-project.json", image);
+            await Throws<DeliveryRejectedException>(() => new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(
+                imagePath, Path.Combine(root, "delivery image result")));
+            Assert(!Directory.Exists(Path.Combine(root, "delivery image result")), "A refused delivery created output.");
+        });
         await check("PCM cuts inside packets require encoding while PNG can stay copied", async () =>
         {
             var unalignedAudioPath = Path.Combine(root, "pcm-blocks.mkv");
@@ -360,7 +467,7 @@ internal static class ExportTests
             var cli = Path.GetFullPath(args[cliOption + 1]);
             Task<ToolResult> RunCli(params string[] arguments) => cli.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                 ? ToolProcess.RunAsync("dotnet", new[] { cli }.Concat(arguments)) : ToolProcess.RunAsync(cli, arguments);
-            await check("CLI caption import, edit, preflight, export and stale-edit rejection", async () =>
+            await check("CLI caption import, edit, preflight, export, delivery and stale-edit rejection", async () =>
             {
                 var path = Path.Combine(root, "cli-export.json");
                 await RunCli("create", source, path);
@@ -386,6 +493,15 @@ internal static class ExportTests
                 var encodedDestination = Path.Combine(root, "cli encoded result");
                 await Throws<MediaToolException>(() => RunCli("export", path, encodedDestination));
                 Assert(!Directory.Exists(encodedDestination), "CLI encoded output without explicit permission.");
+                var deliveryPlanResult = await RunCli("preflight-delivery", Path.Combine(root, "delivery-project.json"));
+                var deliveryPlan = JsonSerializer.Deserialize(deliveryPlanResult.Output, ProjectJson.Default.DeliveryPlan)!;
+                Assert(deliveryPlan.Supported && deliveryPlan.Clips.Length == 2, "CLI delivery preflight failed.");
+                var deliveryDestination = Path.Combine(root, "cli delivery result");
+                var deliveryResult = await RunCli("deliver", Path.Combine(root, "delivery-project.json"), deliveryDestination);
+                var deliveryReport = JsonSerializer.Deserialize(deliveryResult.Output, ProjectJson.Default.DeliveryReport)!;
+                Assert(deliveryReport.ExpectedSeconds == 2 && File.Exists(Path.Combine(deliveryDestination, "video.mp4")),
+                    "CLI delivery did not publish a bundle.");
+                await Throws<MediaToolException>(() => RunCli("deliver", Path.Combine(root, "delivery-project.json"), deliveryDestination));
                 var encoded = await RunCli("export", path, encodedDestination, "--allow-encode");
                 var encodedReport = JsonSerializer.Deserialize(encoded.Output, ProjectJson.Default.ExportReport)!;
                 Assert(encodedReport.Plan.Revision == 4 && encodedReport.Plan.Width == 80 && encodedReport.Plan.Streams[0].Action == "encode" &&

@@ -418,6 +418,14 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return await new ExportPlanner(ffmpeg, ffprobe).PreflightAsync(await _store.LoadAsync(path, token), path, token);
     }
 
+    /// Delivery preflight answers a different question from the strict one: not whether the retained
+    /// material can be copied untouched, but whether this timeline can be re-encoded into one portable file.
+    public async Task<DeliveryPlan> PreflightDeliveryAsync(string projectPath, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        return DeliveryExporter.Plan(await _store.LoadAsync(path, token), path);
+    }
+
     public Task<TimelineFrame> GetTimelineFrameAsync(string projectPath, long expectedRevision, long timelineTicks,
         int maxWidth, CancellationToken token = default)
         => new TimelinePreviewer(ffmpeg, ffprobe).GetFrameAsync(workspace.Resolve(projectPath), expectedRevision,

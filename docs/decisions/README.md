@@ -21,5 +21,6 @@
 | [0017](0017-reversible-timeline-editing.md) | 2026-09-20 | Accepted for the bounded desktop timeline-editing slice | `set-range` edit action so interactive trim/split/reorder stay exactly reversible; `trim` stays narrowing-only |
 | [0018](0018-default-javascript-runtime.md) | 2026-09-21 | Accepted for URL acquisition | Use yt-dlp's default Deno runtime instead of clearing every runtime; supersedes that element of 0007 |
 | [0019](0019-approximated-preview-playback.md) | 2026-09-21 | Accepted for desktop review | Approximate the timeline over one cached source copy; the validated render becomes an explicit action, superseding the playback mechanism in 0015 |
+| [0020](0020-delivery-encode-export.md) | 2026-09-22 | Accepted for the first delivery slice | A re-encoding H.264/AAC MP4 delivery path beside the untouched strict copy export, claiming a faithful edit rather than an untouched copy |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

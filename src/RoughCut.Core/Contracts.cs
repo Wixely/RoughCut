@@ -136,4 +136,6 @@ public sealed record TimelineFrameInfo(
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(ExportPlan))]
 [JsonSerializable(typeof(ExportReport))]
+[JsonSerializable(typeof(DeliveryPlan))]
+[JsonSerializable(typeof(DeliveryReport))]
 public partial class ProjectJson : JsonSerializerContext;

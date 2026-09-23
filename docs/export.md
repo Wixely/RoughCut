@@ -1,9 +1,11 @@
 # Bounded edit-and-export workflow
 
-- Updated: 2026-09-19
+- Updated: 2026-09-22
 - Owner: Implementation agent
 - Review: Before expanding the format matrix, timing policy or export implementation
-- Status: Executed on Windows managed and NativeAOT CLI; [evidence](evidence/2026-09-19-export.md)
+- Status: Executed on Windows managed and NativeAOT CLI; [strict evidence](evidence/2026-09-19-export.md), [delivery evidence](evidence/2026-09-22-delivery-encode.md)
+
+There are two output paths, and they claim different things. **Strict export** proves that retained material reaches the output untouched, and refuses everything it cannot prove. **Delivery** always re-encodes, renders anything FFmpeg decodes, and claims a faithful edit rather than an untouched copy. Everything from here to "Delivery" describes the strict path; delivery has its own section and its own limits.
 
 ## Supported slice
 
@@ -22,7 +24,7 @@ Source and output are each limited to 60 seconds, video to 1920x1080 and 6,000 f
 
 Per-stream decisions apply consistently across the output: if any video clip needs encoding, all video clips use FFV1, keeping concat codec parameters consistent. Audio can remain copied. Source PCM container timestamps may differ from exact sample positions by at most one millisecond for the encoding path; larger gaps/drift are rejected. Output audio samples must exactly match the selected source samples. Hard cuts may still have audible discontinuities; no crossfade is inserted.
 
-MP4, compressed audio (including AAC/priming), video-only sources, VFR/gaps, nonzero origins, chapters, extra streams, multiple source videos, image-only timelines and general silence edits are rejected by export for now. A timed PNG can be inserted only into a timeline with one supported active video/audio source. Its duration must align exactly with the source frame cadence and 48 kHz sample grid, and it always selects complete FFV1/PCM rendering. PNG input is limited to 8 MiB, 8-bit RGB/RGBA, non-interlaced, at most 8K pixels. Chapter-bearing inputs are rejected instead of silently losing chapters; ordinary container metadata is intentionally omitted from output.
+MP4, compressed audio (including AAC/priming), video-only sources, VFR/gaps, nonzero origins, chapters, extra streams, multiple source videos, image-only timelines and general silence edits are rejected by strict export, because it cannot prove a copy for them; most of them deliver instead. A timed PNG can be inserted only into a timeline with one supported active video/audio source. Its duration must align exactly with the source frame cadence and 48 kHz sample grid, and it always selects complete FFV1/PCM rendering. PNG input is limited to 8 MiB, 8-bit RGB/RGBA, non-interlaced, at most 8K pixels. Chapter-bearing inputs are rejected instead of silently losing chapters; ordinary container metadata is intentionally omitted from output.
 
 Applied voice replacement is bounded to corrected, non-overlapping speech under `require-isolated-dialogue`. `exact` fitting requires equal requested and generated durations. `time-stretch` permits a generated/requested tempo ratio from 0.8 through 1.25. Every interval must be fully retained exactly once inside one video clip. Partial cuts, duplicated source use, overlaps and changed generated assets are rejected. Rendering resamples the preview to the source layout, fits to the exact target sample count and replaces all source sound in the interval. There is no source separation, background preservation inside the interval, crossfade or automatic caption-text rewrite.
 
@@ -67,13 +69,34 @@ dotnet run --project src/RoughCut.Cli -- export artifacts/demo/project.json arti
 
 The flag cannot override `copy-only` mode or another unsupported result. Export recomputes preflight from the loaded project snapshot, rather than trusting an earlier plan. Media and caption-source hashes are checked again before publication. The report identifies the exact snapshot even if another edit is saved while export runs.
 
+## Delivery
+
+Delivery ([decision 0020](decisions/0020-delivery-encode-export.md)) renders the retained timeline into one H.264/AAC MP4 by decoding, cutting and re-encoding. It exists because the strict matrix above refuses ordinary acquired media — an AV1/Opus download or an H.264/AAC MP4 cannot be exported at all — and a person still needs a file they can send.
+
+One FFmpeg filter graph does the whole job: each clip is trimmed out of its source with `trim`/`atrim`, cropped if the clip has a crop, fitted into one frame size with its `contain` or `cover` policy, and the results are concatenated. Cuts and ordering are therefore applied exactly once, by the encoder, from decoded frames. Audio is resampled to 48 kHz stereo. Video is `libx264` at CRF 20, audio is AAC at 192 kbit/s, with `+faststart` and no source metadata or chapters.
+
+```powershell
+dotnet run --project src/RoughCut.Cli -- preflight-delivery artifacts/demo/project.json
+dotnet run --project src/RoughCut.Cli -- deliver artifacts/demo/project.json artifacts/demo/delivery
+```
+
+`preflight-delivery` starts no process at all: it maps the timeline, checks the bounds and reports the frame size, clips and duration a delivery would produce, so the cost of an encode is only paid deliberately. It exits nonzero when delivery would refuse.
+
+Bounds are those of a delivery tool rather than a proof: 1 to 400 clips, at most four hours of output and 8 GiB. The first clip sets the delivered frame size, rounded down to even dimensions because H.264 requires them; other clips are fitted into it, so a timeline spanning differently sized sources still produces one file.
+
+Delivery refuses, naming the reason, what it cannot render faithfully in this slice: timed image holds and applied voice replacements, both of which the strict path renders and validates. A missing source file, an empty or oversized timeline and an over-long output are refused before anything runs. A source that carries no audio is rendered with generated silence and named in `silencedAssets` rather than quietly losing its audio track.
+
+What delivery checks before publishing: the delivered file really is H.264 and AAC, it is non-empty and inside the size budget, its duration matches the plan's within the frame each cut lands inside, and every source fingerprint matches the project both before the encode and before publication. What it does not check, and does not claim: frame hashes, sample equality or packet payloads. The bundle is `video.mp4`, `delivery.json` and, when cues survive, `captions.srt`, published by the same staging-and-rename that the strict path uses.
+
+A delivered file is a re-encode. It is not evidence about its source, and where that evidence is the point, use the strict bundle.
+
 ## Captions and output validation
 
 Import accepts plain SRT cue numbers, `HH:MM:SS,mmm` timestamps and multiline nonempty text, up to 1 MiB and 10,000 cues. Original bytes stay untouched; project JSON records the relative path/hash and cues in their original millisecond time base. Imported cues must fall within their source duration. Malformed input is rejected. Caption text is data, never a command or inference instruction.
 
 For each retained slice, intersect caption intervals with its source interval and map them to output time. Removed cues disappear; crossing cues split, and repeated/reordered slices repeat/reorder their cues. Full cue text is retained for partial cues because there is no word alignment yet. JSON retains exact rational timing; the SRT sidecar rounds starts down and ends up to milliseconds. Captions are not burned into video or added as a hidden encode operation in strict mode.
 
-The new output directory is an atomic bundle:
+The new strict output directory is an atomic bundle:
 
 - `video.mkv`: validated copied/encoded streams.
 - `captions.srt`: retimed captions when the project has a caption track; empty if no cues remain.
@@ -83,6 +106,6 @@ Before publication, the exporter checks every output presentation timestamp and 
 
 ## Verification and next action
 
-Run `.\scripts\verify.ps1 -PublishAot` for the synthetic regression suite. The export fixture has visible binary frame IDs, a changing-frequency audio signal and supplied captions. The independent frame-ID check verifies the reorder around the join; production validation additionally checks every pixel hash, selected PCM sample and copied packet payload.
+Run `.\scripts\verify.ps1 -PublishAot` for the synthetic regression suite. The export fixture has visible binary frame IDs, a changing-frequency audio signal and supplied captions. The independent frame-ID check verifies the reorder around the join; production validation additionally checks every pixel hash, selected PCM sample and copied packet payload. Delivery is checked against the same fixture re-encoded to H.264/AAC, reading the frame identifiers back out of the delivered MP4; the [delivery evidence](evidence/2026-09-22-delivery-encode.md) records what that does and does not prove.
 
-Next owner/action: **Implementation agent: make desktop preview preparation nonblocking, add direct crop dragging and measure speaker/overlap error when representative fixtures are available; Wixely: provide representative labelled examples**. Extend codec/container, background-aware replacement or image-compositing coverage only with equivalent join, pixel and audio evidence.
+Next owner/action: **Implementation agent: deliver a real acquired long-form project, offer delivery from the review window, and measure speaker/overlap error when representative fixtures are available; Wixely: provide representative labelled examples**. Extend codec/container, background-aware replacement or image-compositing coverage only with equivalent join, pixel and audio evidence.

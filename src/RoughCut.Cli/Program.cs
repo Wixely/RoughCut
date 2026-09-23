@@ -46,9 +46,12 @@ try
                   create-url <url> <new-output-directory> [deno-executable]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
+                  preflight-delivery <project.json>
+                  deliver <project.json> <new-output-directory>
 
                 Frame requests use source-relative presentation time. JSON metadata goes to stdout.
                 Export is bounded to the documented Matroska video/PCM fixture matrix.
+                Deliver re-encodes any decodable timeline into H.264/AAC MP4; it never claims a copy.
                 Local speech inference requires a separately configured compatible runtime.
                 Executable locations come from ROUGHCUT_FFMPEG / ROUGHCUT_FFPROBE / ROUGHCUT_YTDLP / ROUGHCUT_DENO,
                 then a tools settings file, then PATH. Run `tools` to see what resolves.
@@ -246,6 +249,18 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(report, ProjectJson.Default.ExportReport));
                 break;
             }
+        case ["preflight-delivery", var path]:
+            {
+                var plan = DeliveryExporter.Plan(await store.LoadAsync(path, token), path);
+                Console.WriteLine(JsonSerializer.Serialize(plan, ProjectJson.Default.DeliveryPlan));
+                return plan.Supported ? 0 : 2;
+            }
+        case ["deliver", var path, var destination]:
+            {
+                var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination, token);
+                Console.WriteLine(JsonSerializer.Serialize(report, ProjectJson.Default.DeliveryReport));
+                break;
+            }
         case ["inspect", var path]:
             Console.WriteLine(JsonSerializer.Serialize(await media.InspectAsync(path, token), MediaJson.Default.VideoInfo));
             break;
@@ -332,6 +347,11 @@ catch (ProjectValidationException exception)
 catch (ExportRejectedException exception)
 {
     Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, ProjectJson.Default.ExportPlan));
+    return 2;
+}
+catch (DeliveryRejectedException exception)
+{
+    Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, ProjectJson.Default.DeliveryPlan));
     return 2;
 }
 catch (OperationCanceledException)

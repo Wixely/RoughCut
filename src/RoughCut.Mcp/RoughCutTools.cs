@@ -239,6 +239,16 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
     public Task<CallToolResult> PreflightAsync(string projectPath, CancellationToken cancellationToken)
         => TextAsync(() => operations.PreflightAsync(projectPath, cancellationToken), ProjectJson.Default.ExportPlan);
 
+    [McpServerTool(Name = "roughcut_preflight_delivery", ReadOnly = true)]
+    [Description("Report whether the retained timeline can be re-encoded into one portable H.264/AAC MP4, and the frame size, clips and duration it would deliver. Never writes output and never starts the media tools.")]
+    public Task<CallToolResult> PreflightDeliveryAsync(string projectPath, CancellationToken cancellationToken)
+        => TextAsync(() => operations.PreflightDeliveryAsync(projectPath, cancellationToken), ProjectJson.Default.DeliveryPlan);
+
+    [McpServerTool(Name = "roughcut_start_delivery")]
+    [Description("Queue one durable delivery job that re-encodes the timeline into H.264/AAC MP4. Unlike the strict export this never copies source packets; it claims a faithful edit, not an untouched copy. Output must be a new workspace-relative directory.")]
+    public CallToolResult StartDelivery(string projectPath, string outputDirectory)
+        => Run(() => Text(jobs.Start(projectPath, outputDirectory, allowEncoding: true, mode: "delivery")));
+
     [McpServerTool(Name = "roughcut_start_export")]
     [Description("Queue one bounded, durable export job. Output must be a new workspace-relative directory.")]
     public CallToolResult StartExport(string projectPath, string outputDirectory, bool allowEncoding = false)
@@ -279,6 +289,7 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
     {
         RevisionConflictException => "Project revision conflict; reload the project and retry against its current revision.",
         ExportRejectedException rejected => "Export rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
+        DeliveryRejectedException rejected => "Delivery rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
         IOException or ArgumentException or JsonException or NotSupportedException or KeyNotFoundException or
         InvalidOperationException or OverflowException or HttpRequestException or TimeoutException => exception.Message,
         OperationCanceledException => "Operation cancelled.",
