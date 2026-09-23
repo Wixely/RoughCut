@@ -165,6 +165,51 @@ internal static class DesktopTests
                 "A rejected review proxy replaced the accepted one.");
         });
 
+        await check("Review window exports the timeline to a deliverable MP4 beside the project", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var revision = session.Project.Revision;
+            var report = await session.DeliverAsync();
+            var expected = Path.Combine(root, "desktop-timeline-project-export", "video.mp4");
+            Assert(session.DeliveredPath == expected && File.Exists(expected) && report.Plan.Revision == revision,
+                "The window did not publish an MP4 beside the project for the current revision.");
+            Assert(report.Plan.Clips.Length == session.Project.Timeline.Length &&
+                session.DeliveryStatus.Contains("Exported", StringComparison.Ordinal) &&
+                session.DeliveryStatus.Contains("MiB", StringComparison.Ordinal),
+                "The export did not report what it published.");
+            Assert(session.Project.Revision == revision && (await new ProjectStore().LoadAsync(projectPath)).Revision == revision,
+                "Exporting changed the project.");
+
+            // The window shows the outcome and offers the action; a second export never overwrites the first.
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.ExportStatus == session.DeliveryStatus && model.ExportLabel == "Export MP4" &&
+                document.DebugDump(1280, 800).Contains("Export MP4", StringComparison.Ordinal),
+                "The review window did not offer the export action or show its outcome.");
+
+            await session.DeliverAsync();
+            Assert(session.DeliveredPath == Path.Combine(root, "desktop-timeline-project-export-2", "video.mp4") &&
+                File.Exists(expected), "A second export overwrote or reused the first bundle.");
+
+            await Throws<OperationCanceledException>(() => session.DeliverAsync(new(true)));
+            Assert(!Directory.EnumerateDirectories(root, ".roughcut-delivery-*").Any() &&
+                session.DeliveryStatus.Contains("canceled", StringComparison.OrdinalIgnoreCase),
+                "A cancelled export left staged artifacts or did not say it published nothing.");
+
+            // An unrenderable timeline is refused with its reason before any encode runs.
+            var imageProject = Path.Combine(root, "desktop-image-project.json");
+            var timeline = await new ProjectStore().LoadAsync(Path.Combine(root, "image-project.json"));
+            await new ProjectStore().SaveAsync(imageProject, timeline with { ProjectId = "desktop-image", Revision = 1 }, 0);
+            var images = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(imageProject);
+            await Throws<InvalidOperationException>(() => images.DeliverAsync());
+            Assert(images.DeliveryStatus.Contains("video clips only", StringComparison.Ordinal),
+                "A timeline delivery cannot render was refused without saying why.");
+        });
+
         await check("Recent projects are ordered, bounded, deduplicated and damage tolerant", async () =>
         {
             var storePath = Path.Combine(root, "recent", "recent-projects.json");

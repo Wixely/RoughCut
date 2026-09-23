@@ -82,7 +82,9 @@ dotnet run --project src/RoughCut.Cli -- deliver artifacts/demo/project.json art
 
 `preflight-delivery` starts no process at all: it maps the timeline, checks the bounds and reports the frame size, clips and duration a delivery would produce, so the cost of an encode is only paid deliberately. It exits nonzero when delivery would refuse.
 
-Bounds are those of a delivery tool rather than a proof: 1 to 400 clips, at most four hours of output and 8 GiB. The first clip sets the delivered frame size, rounded down to even dimensions because H.264 requires them; other clips are fitted into it, so a timeline spanning differently sized sources still produces one file.
+Bounds are those of a delivery tool rather than a proof: 1 to 400 clips, at most four hours of output and 8 GiB. The first clip sets the delivered frame size, rounded down to even dimensions because H.264 requires them; other clips are fitted into it, so a timeline spanning differently sized sources still produces one file. A crop rounds down the same way and, where it then matches the delivered frame, the picture is cut straight out of the source rather than scaled into it: dropping one column keeps the remaining pixels, where fitting 135 into 134 would resample all of them.
+
+The review window exports through this path — see the [desktop guide](desktop.md#exporting) — so a finished edit can leave the tool without dropping to the command line.
 
 Delivery refuses, naming the reason, what it cannot render faithfully in this slice: timed image holds and applied voice replacements, both of which the strict path renders and validates. A missing source file, an empty or oversized timeline and an over-long output are refused before anything runs. A source that carries no audio is rendered with generated silence and named in `silencedAssets` rather than quietly losing its audio track.
 

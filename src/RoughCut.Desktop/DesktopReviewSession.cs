@@ -206,6 +206,53 @@ public sealed class DesktopReviewSession
     private string PreviewStatus() => PlaybackCopy is null ? "No preview copy is available" :
         $"Approximated timeline over a preview copy · {PlaybackCopy.Length / 1024d / 1024d:0.0} MiB";
 
+    public string DeliveryStatus { get; private set; } = "Export writes an MP4 beside the project";
+    public string? DeliveredPath { get; private set; }
+
+    /// Renders the saved timeline to a deliverable H.264/AAC MP4 in a new folder beside the project. This is
+    /// the only file the window produces for somebody else to watch, and it is always an explicit action.
+    /// It re-encodes: it delivers the edit, not an untouched copy of the source.
+    public async Task<DeliveryReport> DeliverAsync(CancellationToken token = default)
+    {
+        // Preflight starts no process, so an unrenderable timeline is refused with its reason immediately
+        // rather than after an encode.
+        var plan = DeliveryExporter.Plan(Project, ProjectPath);
+        if (!plan.Supported)
+        {
+            DeliveryStatus = string.Join(" ", plan.Issues.Select(issue => issue.Message));
+            throw new InvalidOperationException(DeliveryStatus);
+        }
+        var destination = UnusedDirectory(Path.GetDirectoryName(ProjectPath)!,
+            Path.GetFileNameWithoutExtension(ProjectPath) + "-export");
+        DeliveryStatus = FormattableString.Invariant(
+            $"Exporting {plan.Width}×{plan.Height} MP4 from revision {plan.Revision}…");
+        try
+        {
+            var report = await new DeliveryExporter(Tools.Ffmpeg, Tools.Ffprobe).ExportAsync(ProjectPath, destination, token);
+            DeliveredPath = Path.Combine(destination, "video.mp4");
+            var name = Path.Combine(Path.GetFileName(destination), "video.mp4");
+            DeliveryStatus = FormattableString.Invariant(
+                $"Exported {name} · {report.OutputBytes / 1024d / 1024d:0.0} MiB · {report.ActualSeconds:0.0}s from revision {report.Plan.Revision}");
+            return report;
+        }
+        catch (OperationCanceledException)
+        {
+            DeliveryStatus = "Export canceled; nothing was published.";
+            throw;
+        }
+        catch (DeliveryRejectedException rejected)
+        {
+            DeliveryStatus = string.Join(" ", rejected.Plan.Issues.Select(issue => issue.Message));
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
+            InvalidOperationException or KeyNotFoundException or ProjectValidationException or MediaToolException)
+        {
+            DeliveryStatus = exception.Message;
+            throw;
+        }
+    }
+
     public void PlaybackUnavailable(string message) => InvalidatePlayback(message);
 
     public void UsePlaybackPreview(string path)

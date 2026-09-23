@@ -187,7 +187,15 @@ public sealed class DeliveryExporter(string ffmpeg = "ffmpeg", string ffprobe = 
     {
         var filters = new List<string>();
         if (clip.Crop is { } crop)
-            filters.Add(FormattableString.Invariant($"crop=w={crop.Width}:h={crop.Height}:x={crop.X}:y={crop.Y}:exact=1"));
+        {
+            // The crop itself rounds down to even dimensions, which is what the plan already promises. A clip
+            // whose crop then matches the delivered frame is cut straight out of the picture: dropping one
+            // column keeps the remaining pixels, where scaling 135 into 134 would resample all of them.
+            var cropWidth = Even(crop.Width);
+            var cropHeight = Even(crop.Height);
+            filters.Add(FormattableString.Invariant($"crop=w={cropWidth}:h={cropHeight}:x={crop.X}:y={crop.Y}:exact=1"));
+            if (cropWidth == width && cropHeight == height) return string.Join(',', filters) + ",setsar=1";
+        }
         if (clip.Fit == "cover")
         {
             filters.Add(FormattableString.Invariant($"scale=w={width}:h={height}:force_original_aspect_ratio=increase"));

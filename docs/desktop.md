@@ -1,7 +1,7 @@
 # Desktop review
 
 - Added: 2026-09-19
-- Updated: 2026-09-21 (project launcher)
+- Updated: 2026-09-22 (export from the window)
 - Owner: Implementation agent
 - Review: When CupriFace changes, the proxy format changes or Linux acceptance begins
 
@@ -36,6 +36,14 @@ The RC-06 Windows desktop review surface uses CupriFace 0.26.1. It reads the sam
 This is deliberately an approximation, and it is labelled as one in the status line. Boundary jumps land on the decoder's nearest frame rather than exactly on the cut, audio is not gapless across a jump, and the copy is re-encoded, so it is not evidence of what export produces. Playing again after the timeline finishes starts it over, and the player's own scrub bar spans the whole source rather than the timeline: dragging it into removed material resumes at the retained material that follows, and dragging it into another clip adopts that clip. **Crop is not applied to the moving picture**: the exact rendered still shows the true crop, and the crop editor shows the rectangle, but approximate playback shows the whole frame. Scaling the player to the crop needs the preview box to take the crop aspect ratio, which this layout engine cannot express, and forcing it distorts the picture. It works for any source FFmpeg can decode, including the AV1/Opus material a URL fetch produces, which the validated export matrix rejects outright.
 
 **Render exact preview** builds the validated export-backed proxy on request: the VP9/Opus WebM including accepted cuts, reordering, crop rendering, inserted images and applied voice replacements, keyed by the exact project JSON hash and revision and capped at 128 MiB. That is the only place the desktop renders video, and it is an explicit action rather than a side effect of editing. It inherits the export gate below, so it refuses sources outside the validated matrix. CupriFace.Media supplies native VP9/Opus decoding, an audio-clocked player and play, pause, mute, seek and fullscreen controls.
+
+### Exporting
+
+**Export MP4** renders the current saved timeline through the [delivery path](export.md#delivery) into a new folder beside the project — `holiday.json` produces `holiday-export/video.mp4`, then `holiday-export-2` — and never overwrites an earlier one. It is the way a finished edit leaves the window, and it works for the ordinary acquired media the validated export matrix refuses, including the AV1/Opus material a URL fetch produces.
+
+The file is a re-encode, not a copy of the source: it delivers the cuts, ordering, crop and retimed captions at the timeline's length, and the bundle's `delivery.json` says exactly that. Preflight runs first and starts no process, so a timeline delivery cannot render — a timed image, an applied voice replacement — is refused immediately with its reason, before an encode begins.
+
+The button reports the outcome under the preview: the folder, the size, the delivered length and the revision it came from. While an export is running the same button cancels it, and a cancelled export publishes nothing. An export never changes the project, and editing during one is allowed: the export renders the revision it started from, which its report names.
 
 The timeline card edits the selected clip. It names the clip, its position in the timeline and its retained source interval, then offers integer IN/OUT fields with **Apply trim**, plus **Split**, **Earlier** and **Later**. Apply trim sets the retained interval through one `set-range` operation, so it both shortens a clip and restores source material a previous trim dropped, bounded by the asset duration. Split divides the clip at the currently selected source frame and names the new clip after it, for example `middle` and `middle-2`. Earlier and Later exchange the clip with its neighbour through one `reorder` operation. Each control saves exactly one revision-checked edit; undo and redo replay the exact inverse, joining a split back into one clip in a single transactional batch. Controls that the current selection cannot apply are hidden rather than offered: Split appears only when the selected source frame lies strictly inside the clip, and the move buttons only when a neighbour exists in that direction. Removing clips stays a CLI/MCP operation because reinserting a removed video clip is not an available edit action, so desktop undo could not reverse it. See [decision 0017](decisions/0017-reversible-timeline-editing.md) and the [timeline-editing evidence](evidence/2026-09-20-desktop-timeline-editing.md).
 

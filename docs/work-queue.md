@@ -1,16 +1,18 @@
 # Implementation work queue
 
-2026-09-22 delivery export: a second output path re-encodes the retained timeline into one H.264/AAC MP4, so ordinary acquired media can leave the tool as a file the strict copy matrix could never produce. It claims a faithful edit with a checked duration, never an untouched copy; the strict path is unchanged. Available as `preflight-delivery`/`deliver` on the CLI and `roughcut_preflight_delivery`/`roughcut_start_delivery` over MCP. See [decision 0020](decisions/0020-delivery-encode-export.md) and the [delivery evidence](evidence/2026-09-22-delivery-encode.md). Owner: Implementation agent; next deliver a real acquired long-form project and offer delivery from the review window.
+2026-09-23 export from the window: **Export MP4** renders the open timeline through the delivery path into a new folder beside the project, reports what it published and cancels on a second press, so a finished edit leaves RoughCut without dropping to the command line. The first real acquired project — the AV1/Opus URL fetch from 2026-09-21, which strict export refuses — delivered a 134×140 H.264/AAC MP4 with its retimed caption in 0.75 s. See the [desktop guide](desktop.md#exporting) and the [delivery evidence](evidence/2026-09-22-delivery-encode.md). Owner: Implementation agent; next press the button on a physical device, and deliver a long-form project.
+
+2026-09-22 delivery export: a second output path re-encodes the retained timeline into one H.264/AAC MP4, so ordinary acquired media can leave the tool as a file the strict copy matrix could never produce. It claims a faithful edit with a checked duration, never an untouched copy; the strict path is unchanged. Available as `preflight-delivery`/`deliver` on the CLI and `roughcut_preflight_delivery`/`roughcut_start_delivery` over MCP. See [decision 0020](decisions/0020-delivery-encode-export.md) and the [delivery evidence](evidence/2026-09-22-delivery-encode.md). Owner: Implementation agent; the window now offers it, and a long-form delivery remains.
 
 2026-09-21 desktop entry point: the window now opens on a project launcher that fetches a video URL with its subtitles, creates a project from a local video, or opens an existing one, with recent-project history, a native operating-system file picker, file drop and a typed path, so RoughCut can be started and used the way an end user would. Supplied review proxies survive edits. VS Code launches are regrouped to 29 profiles with **▶ RoughCut** first. See the [launcher evidence](evidence/2026-09-21-desktop-launcher.md). Owner: Implementation agent; next run the window interactively.
 
-2026-09-20 representative long-form test: URL acquisition, captions and analysis produced a coherent 17-clip, 13:13 factual timeline from a 21:25 VP9/Opus source. Exact indexing now has a five-minute bounded timeout. The strict exporter rejected the source under its documented 60-second lossless-fixture matrix. The delivery path added on 2026-09-22 renders such a timeline, but has not yet been run on that long-form project. Owner: Implementation agent.
+2026-09-20 representative long-form test: URL acquisition, captions and analysis produced a coherent 17-clip, 13:13 factual timeline from a 21:25 VP9/Opus source. Exact indexing now has a five-minute bounded timeout. The strict exporter rejected the source under its documented 60-second lossless-fixture matrix. The delivery path added on 2026-09-22 renders such a timeline and has delivered a short acquired project, but has not yet been run on that 21:25 source. Owner: Implementation agent.
 
 2026-09-20 publication: public GitHub repository Wixely/RoughCut and MIT licensing accepted in decision 0016. Owner: Implementation agent; verify the remote branch after the initial push, then continue RC-06.
 
 2026-09-20 branding: approved aperture-sawblade logo integrated as transparent window/README PNG and Windows executable ICO. Owner: Implementation agent; next verify live window/taskbar and Explorer appearance.
 
-- Updated: 2026-09-22
+- Updated: 2026-09-23
 - Review: Each completed slice or changed dependency decision
 - Status: RC-06 interactive window run opened and played an acquired project; representative diarization quality, audio-device acceptance and Linux remain
 

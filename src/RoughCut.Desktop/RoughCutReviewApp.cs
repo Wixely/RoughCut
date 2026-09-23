@@ -17,6 +17,7 @@ public sealed class RoughCutReviewApp : CupriApp
     private DesktopReviewSession? _session;
     private CupriDocument? _document;
     private CancellationTokenSource? _playbackCancellation;
+    private CancellationTokenSource? _exportCancellation;
     private long _playbackGeneration;
     private CropDragState? _cropDrag;
 
@@ -85,6 +86,7 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".redo", _ => StartCommand(() => UndoRedoAsync(redo: true), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
         document.OnClick(".exact-preview", _ => StartExactPreview());
+        document.OnClick(".export", _ => ToggleExport());
         document.OnPointer("data-crop-drag", HandleCropPointer);
         document.OnClick(".recent-open", e => OpenProject(Required(e, "data-path")));
         document.OnClick(".open-path", _ => OpenOrCreate(_model.OpenPath));
@@ -380,6 +382,47 @@ public sealed class RoughCutReviewApp : CupriApp
 
     private void StartPlaybackPreparation() => StartPlaybackPreparation(exact: false);
 
+    /// Exporting runs for as long as the encode takes, so the same button cancels it. A cancelled export
+    /// publishes nothing, and the project is never changed by exporting it.
+    private void ToggleExport()
+    {
+        CancellationTokenSource? running;
+        lock (_playbackSync) running = _exportCancellation;
+        if (running is not null)
+        {
+            _model.Status = "Canceling the export…";
+            _document?.Refresh();
+            running.Cancel();
+            return;
+        }
+        if (_session is null) return;
+        var cancellation = new CancellationTokenSource();
+        lock (_playbackSync) _exportCancellation = cancellation;
+        _model.ExportLabel = "Cancel export";
+        _model.Status = "Exporting the timeline…";
+        _model.ExportStatus = "Exporting…";
+        _document?.Refresh();
+        _ = Task.Run(async () =>
+        {
+            Exception? failure = null;
+            try { await Session.DeliverAsync(cancellation.Token); }
+            catch (Exception exception) { failure = exception; }
+            lock (_playbackSync)
+            {
+                if (ReferenceEquals(_exportCancellation, cancellation)) _exportCancellation = null;
+            }
+            cancellation.Dispose();
+            Post(() =>
+            {
+                _model.ExportLabel = ExportAction;
+                // The export's own outcome is shown beside the preview; the status line carries any failure.
+                Complete(failure is OperationCanceledException ? null : failure, seekAfter: false);
+            });
+        });
+    }
+
+    private const string ExportAction = "Export MP4";
+
     private void StartPlaybackPreparation(bool exact)
     {
         CancellationTokenSource cancellation;
@@ -569,6 +612,7 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.PlaybackCropStyle = "width:100%;height:100%";
         _model.PlaybackFit = "contain";
         _model.PlaybackStatus = Session.PlaybackStatus;
+        _model.ExportStatus = Session.DeliveryStatus;
         _model.SourcePreviewDataUri = Session.SourcePreview is null ? "" :
             "data:image/png;base64," + Convert.ToBase64String(Session.SourcePreview.Png);
         _model.Selection = Session.Selection;
@@ -692,8 +736,9 @@ public sealed class RoughCutReviewApp : CupriApp
               <div class="stage-column">
                 <div class="preview-card">
                   <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" controls label="Project timeline playback"></cupri-video></div></div>
-                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button></div>
+                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button><cupri-button class="export">{{ExportLabel}}</cupri-button></div>
                   <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
+                  <div class="export-meta">{{ExportStatus}}</div>
                 </div>
                 <div class="timeline-card">
                   <div class="section-title">Timeline</div>
@@ -757,7 +802,8 @@ public sealed class RoughCutReviewApp : CupriApp
         .preview { position:relative; }
         .preview-crop { position:absolute; }
         .preview cupri-video { width:100%; height:100%; }
-        .preview-actions { display:flex; justify-content:flex-end; padding-top:8px; } .preview-actions .hidden { display:none; }
+        .preview-actions { display:flex; gap:8px; justify-content:flex-end; padding-top:8px; } .preview-actions .hidden { display:none; }
+        .export-meta { padding:6px 4px 0; color:var(--muted); font-size:11px; }
         .preview-meta { padding:10px 4px 0; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; } .preview-meta strong { color:var(--text); }
         .section-title { padding:12px 14px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px; font-size:11px; font-weight:bold; }
         .timeline { display:flex; gap:6px; padding:0 12px 12px; overflow:hidden; }
@@ -811,6 +857,8 @@ public sealed partial class ReviewModel
     public string PlaybackFit { get; set; } = "contain";
     public string ExactClass { get; set; } = "";
     public string PlaybackStatus { get; set; } = "";
+    public string ExportStatus { get; set; } = "";
+    public string ExportLabel { get; set; } = "Export MP4";
     public string SourcePreviewDataUri { get; set; } = "";
     public string Selection { get; set; } = "";
     public string Crop { get; set; } = "";
