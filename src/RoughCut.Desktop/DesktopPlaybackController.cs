@@ -20,6 +20,14 @@ public sealed class DesktopPlaybackController : IVideoBackend
         return _player;
     }
 
+    public bool Muted
+    {
+        get => _player?.Muted == true;
+        set { if (_player is not null) _player.Muted = value; }
+    }
+
+    public void Play() => _player?.Play();
+
     public void Seek(double seconds)
     {
         if (_player is not null) _player.Position = Math.Clamp(seconds, 0, _player.Duration);

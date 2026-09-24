@@ -379,6 +379,77 @@ internal static class DesktopTests
                 "The file dialog left the process working directory changed.");
         });
 
+        await check("The transport reads the timeline, not the source copy behind it", async () =>
+        {
+            // Pure mapping first: a timeline that keeps one second out of each half of a four-second source.
+            var project = new EditProject
+            {
+                ProjectId = "transport",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "export source.mkv", new string('a', 64), 4000, 160, 96, "video/x-matroska")],
+                Timeline = [new("second", "source", 1000, 2000), new("fourth", "source", 3000, 4000)]
+            };
+            var map = RoughCut.Core.ProjectValidator.MapTimeline(project);
+            var duration = RoughCut.Desktop.TimelineTransport.Duration(map, project.TimeBase);
+            Assert(duration == 2, "The transport reported the source duration instead of the timeline's.");
+            // Source second 3.5 is timeline second 1.5: the second clip, half a second in.
+            var position = RoughCut.Desktop.TimelinePlayback.OutputSeconds(map, project.TimeBase, 1, 3.5);
+            Assert(Math.Abs(position - 1.5) < 1e-9 &&
+                Math.Abs(RoughCut.Desktop.TimelineTransport.Fraction(position, duration) - 0.75) < 1e-9,
+                "The transport did not place the playing source position on the timeline.");
+            Assert(RoughCut.Desktop.TimelineTransport.Format(position) == "0:01.500" &&
+                RoughCut.Desktop.TimelineTransport.Format(3725.5) == "1:02:05.500" &&
+                RoughCut.Desktop.TimelineTransport.Format(-1) == "0:00.000",
+                "The transport formatted timeline time incorrectly.");
+
+            // Pressing the track seeks in timeline seconds and clamps to its ends.
+            Assert(RoughCut.Desktop.TimelineTransport.Seek(120, 20, 200, duration) == 1 &&
+                RoughCut.Desktop.TimelineTransport.Seek(5, 20, 200, duration) == 0 &&
+                RoughCut.Desktop.TimelineTransport.Seek(900, 20, 200, duration) == 2 &&
+                RoughCut.Desktop.TimelineTransport.Seek(120, 20, 0, duration) == 0,
+                "Scrubbing the transport did not map the press onto the timeline.");
+
+            // Then the window, over real media: the transport replaces the player's source-relative bar.
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
+            var quarter = info.DurationTicks / 4;
+            var projectPath = Path.Combine(root, "desktop-transport-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-transport",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                Timeline = [new("second", "source", quarter, quarter * 2), new("fourth", "source", quarter * 3, quarter * 4)]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session, new RoughCut.Desktop.DesktopPlaybackController());
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.TransportClass == "" && model.TransportDuration == "0:02.000" &&
+                model.TransportPosition == "0:00.000" && model.TransportLabel == "Play",
+                $"The transport did not show the timeline: {model.TransportPosition} / {model.TransportDuration}");
+            var dump = document.DebugDump(1280, 800);
+            Assert(dump.Contains("transport-track", StringComparison.Ordinal) &&
+                !dump.Contains("cupri-video-bar", StringComparison.Ordinal),
+                "The window kept the player's own source-relative control bar.");
+
+            // The transport adds a row inside the preview card, which pushed the cards below it off the
+            // window until the picture's floor came down. Measure it rather than trusting the stylesheet.
+            using var tree = System.Text.Json.JsonDocument.Parse(dump);
+            var transport = FindBox(tree.RootElement.GetProperty("tree"), "transport-track");
+            var evidence = FindBox(tree.RootElement.GetProperty("tree"), "evidence-card");
+            var preview = FindBox(tree.RootElement.GetProperty("tree"), "preview-card");
+            Assert(transport[2] > 200 && transport[0] >= preview[0] - 0.5f &&
+                transport[0] + transport[2] <= preview[0] + preview[2] + 0.5f,
+                $"The scrub track does not sit inside the preview card: x={transport[0]:0.#} w={transport[2]:0.#}");
+            Assert(evidence[1] + evidence[3] <= 800.5f,
+                $"The stage column overflows the window: the evidence card ends at {evidence[1] + evidence[3]:0.#} of 800.");
+        });
+
         await check("Review panel controls stay inside their panel", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-timeline-project.json");

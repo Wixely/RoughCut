@@ -1,7 +1,7 @@
 # Desktop review
 
 - Added: 2026-09-19
-- Updated: 2026-09-24 (clip removal)
+- Updated: 2026-09-24 (clip removal and the timeline transport)
 - Owner: Implementation agent
 - Review: When CupriFace changes, the proxy format changes or Linux acceptance begins
 
@@ -33,7 +33,13 @@ The RC-06 Windows desktop review surface uses CupriFace 0.26.1. It reads the sam
 
 **No video is rendered while editing.** RoughCut makes one preview copy of each source — a VP9/Opus WebM scaled to at most 720 lines, because the player decodes nothing else — keyed by the source fingerprint and cached under the ignored `.roughcut-preview` directory. The timeline is then approximated over that copy: selecting a row seeks to the matching source position, playback jumps at clip boundaries so cuts and reordering are visible, and a crop is shown by scaling the picture inside a clipped frame. Editing changes which parts of the copy play, never the copy itself, so a trim, split, reorder or crop costs nothing to preview. See [decision 0019](decisions/0019-approximated-preview-playback.md).
 
-This is deliberately an approximation, and it is labelled as one in the status line. Boundary jumps land on the decoder's nearest frame rather than exactly on the cut, audio is not gapless across a jump, and the copy is re-encoded, so it is not evidence of what export produces. Playing again after the timeline finishes starts it over, and the player's own scrub bar spans the whole source rather than the timeline: dragging it into removed material resumes at the retained material that follows, and dragging it into another clip adopts that clip. **Crop is not applied to the moving picture**: the exact rendered still shows the true crop, and the crop editor shows the rectangle, but approximate playback shows the whole frame. Scaling the player to the crop needs the preview box to take the crop aspect ratio, which this layout engine cannot express, and forcing it distorts the picture. It works for any source FFmpeg can decode, including the AV1/Opus material a URL fetch produces, which the validated export matrix rejects outright.
+This is deliberately an approximation, and it is labelled as one in the status line. Boundary jumps land on the decoder's nearest frame rather than exactly on the cut, audio is not gapless across a jump, and the copy is re-encoded, so it is not evidence of what export produces. Playing again after the timeline finishes starts it over. **Crop is not applied to the moving picture**: the exact rendered still shows the true crop, and the crop editor shows the rectangle, but approximate playback shows the whole frame. Scaling the player to the crop needs the preview box to take the crop aspect ratio, which this layout engine cannot express, and forcing it distorts the picture. It works for any source FFmpeg can decode, including the AV1/Opus material a URL fetch produces, which the validated export matrix rejects outright.
+
+### Transport
+
+The controls under the picture are RoughCut's, not the player's, and they read the **edit**: position and duration are timeline time, and the scrub bar spans the retained material rather than the whole source. The player is decoding one copy of the source, so its own position is mapped back through the clip that is playing; when an exact render is loaded the player already is the timeline and the position is used as it stands. Pressing or dragging the track seeks in timeline seconds, which means a press can only land on material the edit keeps — there is nowhere on the bar that corresponds to removed material. Play, pause and mute sit beside it, and pressing play on a finished timeline starts it over. See the [transport evidence](evidence/2026-09-24-timeline-transport.md).
+
+This replaces the player's own control bar, which showed the source's position and duration and was the first thing to confuse a person reviewing an edit. The cost is its fullscreen control, which is not reimplemented. The readout updates ten times a second and only when it changes, so a still picture costs nothing to display.
 
 **Render exact preview** builds the validated export-backed proxy on request: the VP9/Opus WebM including accepted cuts, reordering, crop rendering, inserted images and applied voice replacements, keyed by the exact project JSON hash and revision and capped at 128 MiB. That is the only place the desktop renders video, and it is an explicit action rather than a side effect of editing. It inherits the export gate below, so it refuses sources outside the validated matrix. CupriFace.Media supplies native VP9/Opus decoding, an audio-clocked player and play, pause, mute, seek and fullscreen controls.
 
