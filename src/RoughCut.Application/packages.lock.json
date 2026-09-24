@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "roughcut.core": {
+        "type": "Project"
+      },
+      "roughcut.media": {
+        "type": "Project",
+        "dependencies": {
+          "RoughCut.Core": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

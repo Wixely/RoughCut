@@ -22,6 +22,8 @@ Status on **2026-09-24**: the .NET 10 CLI and [stdio MCP host](docs/mcp.md) supp
 4. Read the [MVP scope](docs/mvp.md) and execute the [work queue](docs/work-queue.md), continuing with a physical-device desktop run and representative speaker measurement.
 5. Record evidence using the [validation plan](docs/validation.md) and preserve [decision history](docs/decisions/README.md).
 
+Before using RoughCut on your own material, read [what it does not do](docs/unsupported.md) — one page of enforced limits and untested ground. [Dependencies, licences and assets](docs/dependencies.md) records what is pinned, what ships, and what you must install yourself.
+
 The completed export feasibility slice proves supported copy-only edits, explicit crop/image/voice encoding and unsupported-cut rejection on synthetic video/audio. Read its format limits before using it with other media. The delivery path beside it re-encodes any decodable timeline to H.264/AAC MP4 and checks provenance, codecs and duration rather than pixels; it is the way out for real acquired media. Shared operations, local STT and Sherpa diarization, speaker/voice previews, loopback Qwen synthesis and durable export jobs are exposed through stdio MCP. Background-aware replacement, broader desktop editing and broader UI choices still require evaluation.
 
 ```powershell

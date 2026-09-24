@@ -1,10 +1,10 @@
 # Development and first CLI slice
 
-- Updated: 2026-09-19
+- Updated: 2026-09-24
 - Review: When CLI commands, SDK or media dependencies change
 - Owner: Implementation agent
 
-Use .NET SDK 10.0.300 (latest patch roll-forward in that feature band) and standalone FFmpeg/FFprobe. URL acquisition additionally needs a standalone yt-dlp executable. Full current YouTube support also needs a JavaScript runtime: yt-dlp enables Deno by default and finds it on `PATH` or beside `yt-dlp.exe`, so it needs no configuring when Deno is present; without a runtime, acquisition still works with fewer available formats.
+Use .NET SDK 10.0.300 (latest patch roll-forward in that feature band) and standalone FFmpeg/FFprobe. Package versions are pinned exactly and locked: build machines should restore with `--locked-mode`, and `.\scripts\dependency-report.ps1` prints every resolved package with its licence. See [dependencies, licences and assets](dependencies.md). URL acquisition additionally needs a standalone yt-dlp executable. Full current YouTube support also needs a JavaScript runtime: yt-dlp enables Deno by default and finds it on `PATH` or beside `yt-dlp.exe`, so it needs no configuring when Deno is present; without a runtime, acquisition still works with fewer available formats.
 
 ### Where RoughCut looks for executables
 
