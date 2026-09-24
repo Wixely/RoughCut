@@ -8,5 +8,9 @@
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
     <!-- Committed lock files: a restore anywhere resolves the same graph, or fails rather than drifting. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The runtimes we publish for. A lock file is per framework and RID, so a RID-specific publish of a
+         project that declares none rewrites it and breaks the next locked restore: naming them keeps one
+         lock file valid for both the ordinary build and a self-contained publish. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
   </PropertyGroup>
 </Project>

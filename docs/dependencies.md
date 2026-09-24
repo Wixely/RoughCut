@@ -20,6 +20,8 @@ dotnet restore RoughCut.slnx --locked-mode   # resolve exactly what is committed
 
 The SDK is pinned in `global.json` to 10.0.300 with `rollForward: latestPatch`.
 
+A lock file is per framework **and runtime identifier**, which matters the moment anything is published for a specific runtime: a `-r win-x64 --self-contained` publish of a project that declares no runtimes rewrites its lock file with a `net10.0/win-x64` section, and the next ordinary locked restore then fails with NU1004. `Directory.Build.props` therefore declares `RuntimeIdentifiers` as `win-x64`, so one lock file covers both the ordinary build and the self-contained publish and neither disturbs the other. Adding a platform means adding its identifier there and regenerating the lock files in the same commit.
+
 ## Managed packages
 
 Nine direct references, resolving to 83 packages in total. Every one carries a permissive licence, which the report asserts: MIT for 69, Apache-2.0 for 12, Zlib for 2.
@@ -54,7 +56,7 @@ These arrive inside the managed packages above and are copied next to the execut
 | `whisper`, `ggml-*` | Whisper.net.Runtime | MIT | Local transcription |
 | `sherpa-onnx-c-api`, `onnxruntime` | org.k2fsa.sherpa.onnx runtime packages | Apache-2.0, MIT | Local diarization |
 
-The CLI is the only project that has been published NativeAOT, and that path cannot be rebuilt on the current verification machine because the MSVC platform linker is absent. The MCP host is a normal managed deployment: its reflection-based schema generation and these native speech runtimes have not been qualified for NativeAOT.
+All three hosts publish and pass the whole suite from their published layout, including a self-contained desktop build that needs no .NET installed; see the [published-outputs evidence](evidence/2026-09-24-published-outputs.md) and `scripts/verify.ps1 -Published`. The CLI is the only project that has been published NativeAOT, and that path cannot be rebuilt on the current verification machine because the MSVC platform linker is absent. The MCP host is a normal managed deployment: its reflection-based schema generation and these native speech runtimes have not been qualified for NativeAOT.
 
 ## External tools, never distributed
 
