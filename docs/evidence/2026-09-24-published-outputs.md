@@ -34,7 +34,7 @@ This would have reached a build machine as an intermittent failure depending on 
 
 ## Limitations
 
-Windows x64 only. Linux and macOS publishing have not been attempted, and neither has an ARM64 build of anything.
+Windows x64 is the only platform anything was executed on. `linux-x64` is declared and locked, and the CLI and desktop publish for it carrying their Linux native assets, but nothing was run: that is a buildable starting point, not a Linux result. macOS has not been attempted, and neither has an ARM64 build of anything.
 
 The NativeAOT CLI path could not be rebuilt: the MSVC platform linker is absent on this machine. The last NativeAOT run passed 56 checks on an earlier slice, and that number has not moved since.
 

@@ -20,7 +20,9 @@ dotnet restore RoughCut.slnx --locked-mode   # resolve exactly what is committed
 
 The SDK is pinned in `global.json` to 10.0.300 with `rollForward: latestPatch`.
 
-A lock file is per framework **and runtime identifier**, which matters the moment anything is published for a specific runtime: a `-r win-x64 --self-contained` publish of a project that declares no runtimes rewrites its lock file with a `net10.0/win-x64` section, and the next ordinary locked restore then fails with NU1004. `Directory.Build.props` therefore declares `RuntimeIdentifiers` as `win-x64`, so one lock file covers both the ordinary build and the self-contained publish and neither disturbs the other. Adding a platform means adding its identifier there and regenerating the lock files in the same commit.
+A lock file is per framework **and runtime identifier**, which matters the moment anything is published for a specific runtime: a `-r win-x64 --self-contained` publish of a project that declares no runtimes rewrites its lock file with a `net10.0/win-x64` section, and the next ordinary locked restore then fails with NU1004. `Directory.Build.props` therefore declares `RuntimeIdentifiers` as `win-x64;linux-x64`, so one lock file covers the ordinary build and a publish for either platform, and none of them disturbs the others. Adding a platform means adding its identifier there and regenerating the lock files in the same commit.
+
+`linux-x64` is declared and its graph is locked, and the CLI and the desktop both publish for it with their Linux native assets — `libcupricodecs.so`, `libSkiaSharp.so`, `libHarfBuzzSharp.so`, `libSDL2-2.0.so`. Nothing has been **run** on Linux, so that is a restorable, buildable starting point and no more.
 
 ## Managed packages
 
