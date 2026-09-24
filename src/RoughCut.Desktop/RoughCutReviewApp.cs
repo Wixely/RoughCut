@@ -78,6 +78,8 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".apply-trim", _ => StartCommand(ApplyTrimAsync, seekAfter: true, rebuildPlayback: true));
         document.OnClick(".split-clip", _ => StartCommand(() => Session.SplitSelectedClipAsync(),
             seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".remove-clip", _ => StartCommand(() => Session.RemoveSelectedClipAsync(),
+            seekAfter: true, rebuildPlayback: true));
         document.OnClick(".move-earlier", _ => StartCommand(() => Session.MoveSelectedClipAsync(-1),
             seekAfter: true, rebuildPlayback: true));
         document.OnClick(".move-later", _ => StartCommand(() => Session.MoveSelectedClipAsync(1),
@@ -643,6 +645,8 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.SplitSummary = splitAt is { } tick
             ? FormattableString.Invariant($"Split at source tick {tick}")
             : "Select an interior source frame to split this clip";
+        // Removing the only clip would leave nothing to preview and nothing the window could put back.
+        _model.RemoveClass = selectedClip is not null && selectedAsset?.Kind == "video" && project.Timeline.Length > 1 ? "" : "hidden";
         _model.MoveEarlierClass = clipIndex > 0 ? "" : "hidden";
         _model.MoveLaterClass = clipIndex >= 0 && clipIndex < project.Timeline.Length - 1 ? "" : "hidden";
         _model.Speakers = project.Speakers.Select(item => new SpeakerRow
@@ -745,7 +749,7 @@ public sealed class RoughCutReviewApp : CupriApp
                   <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></button></div>
                   <div class="clip-editor {{ClipEditorClass}}">
                     <div class="clip-summary">{{ClipSummary}} · {{SplitSummary}}</div>
-                    <div class="clip-controls"><label><span>IN</span><cupri-textfield value="{{TrimIn}}"></cupri-textfield></label><label><span>OUT</span><cupri-textfield value="{{TrimOut}}"></cupri-textfield></label><div class="clip-actions"><cupri-button class="apply-trim">Apply trim</cupri-button><cupri-button class="split-clip {{SplitClass}}" variant="ghost">Split</cupri-button><cupri-button class="move-earlier {{MoveEarlierClass}}" variant="ghost">Earlier</cupri-button><cupri-button class="move-later {{MoveLaterClass}}" variant="ghost">Later</cupri-button></div></div>
+                    <div class="clip-controls"><label><span>IN</span><cupri-textfield value="{{TrimIn}}"></cupri-textfield></label><label><span>OUT</span><cupri-textfield value="{{TrimOut}}"></cupri-textfield></label><div class="clip-actions"><cupri-button class="apply-trim">Apply trim</cupri-button><cupri-button class="split-clip {{SplitClass}}" variant="ghost">Split</cupri-button><cupri-button class="remove-clip {{RemoveClass}}" variant="ghost">Remove</cupri-button><cupri-button class="move-earlier {{MoveEarlierClass}}" variant="ghost">Earlier</cupri-button><cupri-button class="move-later {{MoveLaterClass}}" variant="ghost">Later</cupri-button></div></div>
                   </div>
                 </div>
                 <div class="evidence-card">
@@ -875,6 +879,7 @@ public sealed partial class ReviewModel
     public string ClipSummary { get; set; } = "";
     public string SplitSummary { get; set; } = "";
     public string SplitClass { get; set; } = "hidden";
+    public string RemoveClass { get; set; } = "hidden";
     public string MoveEarlierClass { get; set; } = "hidden";
     public string MoveLaterClass { get; set; } = "hidden";
     public string TrimIn { get; set; } = "0";

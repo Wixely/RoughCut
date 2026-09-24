@@ -60,6 +60,42 @@ internal static class ExportTests
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "later", In: 2000, Out: 2000)])));
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "missing", In: 0, Out: 1)])));
         });
+        await check("Insert-clip restores a removed clip exactly, and refuses anything else", async () =>
+        {
+            var full = project with
+            {
+                Assets = [.. project.Assets, new("still", "image", "still.png", new string('b', 64), 0, 160, 96, "image/png")],
+                Timeline = [new("first", "source-1", 0, 1000), new("middle", "source-1", 1000, 2000, new(8, 4, 80, 48), "cover", "silence"),
+                    new("last", "source-1", 2000, 3000)]
+            };
+            var removed = TimelineEditor.Apply(full, [new("remove", "middle")]);
+            Assert(removed.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "last"]), "Remove did not drop the clip.");
+            var restored = TimelineEditor.Apply(removed, [new("insert-clip", "middle", In: 1000, Out: 2000,
+                Crop: new(8, 4, 80, 48), AssetId: "source-1", BeforeClipId: "last", Fit: "cover", Audio: "silence")]);
+            Assert(restored.Timeline.SequenceEqual(full.Timeline), "Insert-clip did not restore the exact clip in its place.");
+            Assert(TimelineEditor.Apply(TimelineEditor.Apply(full, [new("remove", "last")]),
+                [new("insert-clip", "last", In: 2000, Out: 3000, AssetId: "source-1")]).Timeline.Select(clip => clip.Id)
+                .SequenceEqual(["first", "middle", "last"]), "Insert-clip did not append a clip removed from the end.");
+
+            // Anything that is not an exact restoration of retained source material is refused.
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "first", In: 0, Out: 1000, AssetId: "source-1")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 1000, Out: 9000, AssetId: "source-1")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 2000, Out: 2000, AssetId: "source-1")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "still")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "missing")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "source-1", BeforeClipId: "absent")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "source-1", Audio: "music")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "source-1", At: 5)])));
+            Assert(removed.Timeline.Length == 2, "A refused insertion changed the timeline.");
+        });
         await check("SRT import retains provenance; cuts split, drop and reorder cues", async () =>
         {
             var track = new CaptionTrack("source-1", "captions.srt", new string('b', 64), new(1, 1000), Captions.ParseSrt(srt));

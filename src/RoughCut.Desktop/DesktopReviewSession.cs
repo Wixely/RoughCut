@@ -369,6 +369,23 @@ public sealed class DesktopReviewSession
         await RefreshAfterTimelineAsync(selected, token);
     }
 
+    /// Removing is paired with insert-clip, which puts the exact clip back where it was, so the reviewer
+    /// can cut material out and still undo it. A timeline always keeps at least one clip: an empty one has
+    /// nothing to preview, and nothing in the window could add a clip back.
+    public async Task RemoveSelectedClipAsync(CancellationToken token = default)
+    {
+        var clip = RequireSelectedVideoClip("removed");
+        if (Project.Timeline.Length <= 1)
+            throw new InvalidOperationException("The timeline must keep at least one clip; trim this one instead.");
+        var index = Array.FindIndex(Project.Timeline, item => item.Id == clip.Id);
+        var before = index + 1 < Project.Timeline.Length ? Project.Timeline[index + 1].Id : null;
+        var selected = Preview?.Info;
+        await ApplyTimelineAsync([new("remove", clip.Id)], token);
+        _undo.Push(new RemovalChange(clip, before));
+        _redo.Clear();
+        await RefreshAfterTimelineAsync(selected, token);
+    }
+
     public async Task MoveSelectedClipAsync(int offset, CancellationToken token = default)
     {
         var clipId = SelectedClipId ?? throw new InvalidOperationException("Select a clip before reordering it.");
@@ -528,6 +545,13 @@ public sealed class DesktopReviewSession
                     : [new("remove", split.NewClipId), new("set-range", split.ClipId, In: split.In, Out: split.Out)],
                     token);
                 return true;
+            case RemovalChange removal:
+                await ApplyTimelineAsync(forward
+                    ? [new("remove", removal.Clip.Id)]
+                    : [new("insert-clip", removal.Clip.Id, In: removal.Clip.In, Out: removal.Clip.Out,
+                        Crop: removal.Clip.Crop, AssetId: removal.Clip.AssetId, BeforeClipId: removal.BeforeClipId,
+                        Fit: removal.Clip.Fit, Audio: removal.Clip.Audio)], token);
+                return true;
             case OrderChange order:
                 await ApplyTimelineAsync([new("reorder", Order: forward ? order.After : order.Before)], token);
                 return true;
@@ -541,4 +565,5 @@ public sealed class DesktopReviewSession
     private sealed record RangeChange(string ClipId, long BeforeIn, long BeforeOut, long AfterIn, long AfterOut) : ReviewChange;
     private sealed record SplitChange(string ClipId, long In, long Out, long At, string NewClipId) : ReviewChange;
     private sealed record OrderChange(string[] Before, string[] After) : ReviewChange;
+    private sealed record RemovalChange(TimelineClip Clip, string? BeforeClipId) : ReviewChange;
 }

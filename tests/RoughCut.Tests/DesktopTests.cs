@@ -125,6 +125,57 @@ internal static class DesktopTests
                 "Redoing the timeline edits did not reproduce the split, trim and order.");
         });
 
+        await check("Desktop clip removal persists with undo and redo", async () =>
+        {
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
+            var third = info.DurationTicks / 3;
+            var projectPath = Path.Combine(root, "desktop-removal-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-removal",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                // Every video clip shares one output canvas, so the crop is the same on all three.
+                Timeline = [new("first", "source", 0, third, new(8, 4, info.Width - 16, info.Height - 8)),
+                    new("advert", "source", third, third * 2, new(8, 4, info.Width - 16, info.Height - 8)),
+                    new("last", "source", third * 2, info.DurationTicks, new(8, 4, info.Width - 16, info.Height - 8))]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            await session.SelectClipAsync("advert");
+            var removed = session.Project.Timeline.Single(clip => clip.Id == "advert");
+
+            await session.RemoveSelectedClipAsync();
+            Assert(session.Project.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "last"]),
+                "Removing the selected clip did not cut it out of the timeline.");
+
+            await session.UndoAsync();
+            Assert(session.Project.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "advert", "last"]) &&
+                session.Project.Timeline[1] == removed,
+                "Undo did not put the removed clip back exactly where it was.");
+
+            await session.RedoAsync();
+            var saved = await new ProjectStore().LoadAsync(projectPath);
+            Assert(saved.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "last"]) && saved.Revision == 4,
+                "Redo did not remove the clip again in one revision each.");
+
+            // The last clip cannot be removed: nothing in the window could add a clip back to an empty timeline.
+            await session.SelectClipAsync("first");
+            await session.RemoveSelectedClipAsync();
+            await session.SelectClipAsync("last");
+            await Throws<InvalidOperationException>(() => session.RemoveSelectedClipAsync());
+            Assert(session.Project.Timeline.Length == 1, "The last clip was removed.");
+
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.RemoveClass == "hidden", "Remove was offered for the only clip on the timeline.");
+        });
+
         await check("Supplied review proxy survives edits and reports that it is behind", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-timeline-project.json");

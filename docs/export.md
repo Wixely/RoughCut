@@ -1,6 +1,6 @@
 # Bounded edit-and-export workflow
 
-- Updated: 2026-09-22
+- Updated: 2026-09-24
 - Owner: Implementation agent
 - Review: Before expanding the format matrix, timing policy or export implementation
 - Status: Executed on Windows managed and NativeAOT CLI; [strict evidence](evidence/2026-09-19-export.md), [delivery evidence](evidence/2026-09-22-delivery-encode.md)
@@ -53,11 +53,12 @@ The example operations require a source of at least three seconds, a project tim
   { "action": "crop", "clipId": "clip-1", "crop": { "x": 0, "y": 0, "width": 80, "height": 48 } },
   { "action": "crop", "clipId": "clip-2", "crop": { "x": 8, "y": 4, "width": 80, "height": 48 } },
   { "action": "insert-image", "clipId": "title-card", "assetId": "image-a1", "duration": 1000, "beforeClipId": "clip-1", "fit": "contain" },
+  { "action": "insert-clip", "clipId": "clip-1", "assetId": "source-1", "in": 0, "out": 1000, "beforeClipId": "clip-2", "audio": "source" },
   { "action": "export-mode", "mode": "prefer-stream-copy" }
 ]
 ```
 
-Use `remove` with `clipId` to delete a clip, or `crop` with a null crop to clear it. `insert-image` requires an imported image asset, a new clip ID and a positive hold duration in project ticks; omit `beforeClipId` to append it. Its audio policy is fixed to silence. Reorder must list every remaining clip exactly once. Trim only shrinks the current interval. `set-range` replaces a clip's retained interval anywhere inside its source, so it can also restore material an earlier trim dropped; it keeps image holds starting at zero and never reaches past the asset duration. Use it when an interactive editor must reverse a trim, and keep `trim` where a batch must be unable to extend a clip. Use a saved prior project as a candidate with the next revision to restore an earlier edit; the desktop review host keeps its own session undo history.
+Use `remove` with `clipId` to delete a clip, or `crop` with a null crop to clear it. `insert-clip` is its inverse: it puts a video clip back with an explicit `clipId`, `assetId`, `in`, `out` and optional `crop`, `fit`, `audio` and `beforeClipId`, so an interactive editor can offer removal and still undo it exactly. It restores material inside a video source only — image holds use `insert-image` — and never reaches past the asset duration. `insert-image` requires an imported image asset, a new clip ID and a positive hold duration in project ticks; omit `beforeClipId` to append it. Its audio policy is fixed to silence. Reorder must list every remaining clip exactly once. Trim only shrinks the current interval. `set-range` replaces a clip's retained interval anywhere inside its source, so it can also restore material an earlier trim dropped; it keeps image holds starting at zero and never reaches past the asset duration. Use it when an interactive editor must reverse a trim, and keep `trim` where a batch must be unable to extend a clip. Use a saved prior project as a candidate with the next revision to restore an earlier edit; the desktop review host keeps its own session undo history.
 
 `preflight` prints a JSON plan and exits nonzero for unsupported requests. The plan includes the canonical project hash/revision, requested/resolved boundaries, frame/sample ranges, output mapping, dimensions and each stream's copy/encode reason. It verifies the used media and caption-source hashes. It does not trust a keyframe flag as proof of independent decoding.
 
