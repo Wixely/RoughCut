@@ -80,7 +80,12 @@ static int Snapshot(string outputPath, DesktopReviewSession? session)
 {
     outputPath = Path.GetFullPath(outputPath);
     if (File.Exists(outputPath)) throw new IOException("Snapshot output already exists.");
-    using var document = new RoughCutReviewApp(session).CreateDocument();
+    var app = new RoughCutReviewApp(session);
+    using var document = app.CreateDocument();
+    // The view measures itself from a laid-out document — the cropped playback box among other things — so
+    // the snapshot lays out, presents once and only then renders what the window would show.
+    document.BuildDisplayList(1280, 800);
+    app.Present(1280, 800);
     using var image = document.RenderToImage(1280, 800, new SKColor(0x0b, 0x0f, 0x17));
     using var data = image.Encode(SKEncodedImageFormat.Png, 100);
     Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);

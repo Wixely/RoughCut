@@ -23,6 +23,8 @@ public sealed class RoughCutReviewApp : CupriApp
     private TransportDragState? _transportDrag;
     private ClipDragState? _clipDrag;
     private long _transportShownAt;
+    private (float Width, float Height) _previewBox;
+    private string _previewKey = "";
     private string _transportPosition = "";
 
     public RoughCutReviewApp(DesktopReviewSession? session = null,
@@ -185,7 +187,40 @@ public sealed class RoughCutReviewApp : CupriApp
             playback?.Pause();
         }
         UpdateTransport();
+        UpdatePreviewCrop();
         return base.Present(width, height);
+    }
+
+    /// A cropped clip has to play cropped, and that needs the preview's real size: the crop is applied by
+    /// enlarging and offsetting the picture inside a box shaped like the crop. The box is measured from the
+    /// laid-out document, and only a change in that size, the crop or the playing state costs a refresh.
+    private void UpdatePreviewCrop()
+    {
+        if (_session is null || _document?.Root is not { } root) return;
+        if (FindByClass(root, "preview") is not { Width: > 0, Height: > 0 } preview) return;
+        var playing = playback?.Playing == true;
+        var key = FormattableString.Invariant(
+            $"{preview.Width:0.#}x{preview.Height:0.#}|{CropKey()}|{playing}|{Session.Playback is not null}");
+        if (key == _previewKey) return;
+        _previewKey = key;
+        _previewBox = (preview.Width, preview.Height);
+        ApplyPreviewCrop();
+        _document.Refresh();
+    }
+
+    private string CropKey()
+    {
+        var clip = Session.Project.Timeline.FirstOrDefault(item => item.Id == Session.SelectedClipId);
+        return clip?.Crop is { } crop
+            ? FormattableString.Invariant($"{crop.X},{crop.Y},{crop.Width},{crop.Height}") : "none";
+    }
+
+    private static CupriFace.Dom.RenderNode? FindByClass(CupriFace.Dom.RenderNode node, string cssClass)
+    {
+        if (node.Element?.ClassList.Contains(cssClass) == true) return node;
+        foreach (var child in node.Children)
+            if (FindByClass(child, cssClass) is { } found) return found;
+        return null;
     }
 
     /// The transport is redrawn while the picture moves, which needs a document refresh. It is throttled to
@@ -783,10 +818,7 @@ public sealed class RoughCutReviewApp : CupriApp
         var playbackPath = Session.Playback?.Path ?? Session.PlaybackCopy?.Path;
         _model.PlaybackUri = playbackPath is null ? "" : new Uri(playbackPath).AbsoluteUri;
         _model.ExactClass = Session.Playback is null ? "" : "hidden";
-        // The exact still already shows the true crop. Scaling the player to match would distort it, because
-        // the preview box cannot take the crop's aspect ratio in this layout engine; see the desktop guide.
-        _model.PlaybackCropStyle = "width:100%;height:100%";
-        _model.PlaybackFit = "contain";
+        ApplyPreviewCrop();
         _model.PlaybackStatus = Session.PlaybackStatus;
         _model.ExportStatus = Session.DeliveryStatus;
         ApplyTransport();
@@ -869,6 +901,21 @@ public sealed class RoughCutReviewApp : CupriApp
         if (!preserveStatus) _model.Status = "Ready";
     }
 
+    /// An exact render already contains the cropped pixels, so only the source copy is cropped by the view.
+    private void ApplyPreviewCrop()
+    {
+        var clip = _session is null ? null :
+            Session.Project.Timeline.FirstOrDefault(item => item.Id == Session.SelectedClipId);
+        var asset = clip is null || _session is null ? null :
+            Session.Project.Assets.FirstOrDefault(item => item.Id == clip.AssetId);
+        var crop = _session is not null && Session.Playback is null ? clip?.Crop : null;
+        var layout = PreviewCropGeometry.ForCrop(_previewBox.Width, _previewBox.Height,
+            asset?.Width ?? 0, asset?.Height ?? 0, crop, playback?.Playing == true);
+        _model.PlaybackCropStyle = layout.ContainerStyle;
+        _model.PlaybackVideoStyle = layout.VideoStyle;
+        _model.PlaybackFit = layout.Fit;
+    }
+
     /// Writes the transport in timeline time, so the numbers under the picture describe the edit rather
     /// than the source copy the player is actually decoding.
     private void ApplyTransport()
@@ -942,7 +989,7 @@ public sealed class RoughCutReviewApp : CupriApp
             <section class="workspace {{WorkspaceClass}}">
               <div class="stage-column">
                 <div class="preview-card">
-                  <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" label="Project timeline playback"></cupri-video></div></div>
+                  <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" style="{{PlaybackVideoStyle}}" label="Project timeline playback"></cupri-video></div></div>
                   <div class="transport {{TransportClass}}"><cupri-button class="transport-play" variant="ghost">{{TransportLabel}}</cupri-button><div class="transport-track" data-transport="seek"><div class="transport-fill" style="{{TransportFillStyle}}"></div><span class="transport-thumb" style="{{TransportThumbStyle}}"></span></div><span class="transport-time">{{TransportPosition}} / {{TransportDuration}}</span><cupri-button class="transport-mute" variant="ghost">{{TransportMuteLabel}}</cupri-button></div>
                   <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button><cupri-button class="export">{{ExportLabel}}</cupri-button></div>
                   <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
@@ -1008,8 +1055,9 @@ public sealed class RoughCutReviewApp : CupriApp
         .preview-card { min-height:300px; padding:12px; display:flex; flex-direction:column; }
         .preview { flex:1; min-height:180px; display:flex; align-items:center; justify-content:center; background:#05070b; border-radius:8px; overflow:hidden; }
         .preview { position:relative; }
-        .preview-crop { position:absolute; }
-        .preview cupri-video { width:100%; height:100%; }
+        /* The crop box clips the enlarged picture inside it while a cropped clip plays. */
+        .preview-crop { position:absolute; overflow:hidden; }
+        .preview cupri-video { position:absolute; }
         .transport { display:grid; grid-template-columns:92px minmax(0,1fr) auto 92px; gap:10px; align-items:center; padding-top:10px; } .transport.hidden { display:none; }
         /* Buttons size to their cell, which would otherwise leave a squeezed track between two wide ones. */
         .transport cupri-button { box-sizing:border-box; min-width:0; width:92px; }
@@ -1073,7 +1121,8 @@ public sealed partial class ReviewModel
     public string Revision { get; set; } = "";
     public string PreviewDataUri { get; set; } = "";
     public string PlaybackUri { get; set; } = "";
-    public string PlaybackCropStyle { get; set; } = "width:100%;height:100%";
+    public string PlaybackCropStyle { get; set; } = "left:0;top:0;width:100%;height:100%";
+    public string PlaybackVideoStyle { get; set; } = "left:0;top:0;width:100%;height:100%";
     public string PlaybackFit { get; set; } = "contain";
     public string ExactClass { get; set; } = "";
     public string PlaybackStatus { get; set; } = "";

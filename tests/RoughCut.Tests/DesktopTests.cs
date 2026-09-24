@@ -598,6 +598,57 @@ internal static class DesktopTests
             return Task.CompletedTask;
         });
 
+        await check("A cropped clip plays cropped, without stretching the picture", async () =>
+        {
+            // One scale drives both boxes, so the visible box takes the crop's shape and the picture
+            // inside it keeps the source's. Preview 800x400, source 160x96, crop 80x48 at (8,4).
+            var crop = new Crop(8, 4, 80, 48);
+            var paused = RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, crop, playing: false);
+            Assert(paused.ContainerStyle == "left:66.67px;top:0px;width:666.67px;height:400px" &&
+                paused.VideoStyle == "left:0;top:0;width:100%;height:100%" && paused.Fit == "contain",
+                $"A paused cropped clip did not letterbox its exact frame: {paused.ContainerStyle} / {paused.VideoStyle}");
+            var playing = RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, crop, playing: true);
+            Assert(playing.ContainerStyle == paused.ContainerStyle &&
+                playing.VideoStyle == "left:-66.67px;top:-33.33px;width:1333.33px;height:800px" &&
+                playing.Fit == "fill",
+                $"A playing cropped clip did not enlarge and offset the source: {playing.VideoStyle}");
+            // The enlarged picture keeps the source aspect ratio, which is what stops it stretching.
+            Assert(Math.Abs(1333.33 / 800 - 160 / 96d) < 0.01, "The enlarged picture would distort the source.");
+
+            const string whole = "left:0;top:0;width:100%;height:100%";
+            Assert(RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, null, true).ContainerStyle == whole &&
+                RoughCut.Desktop.PreviewCropGeometry.ForCrop(0, 0, 160, 96, crop, true).ContainerStyle == whole &&
+                RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, new(8, 4, 200, 48), true).ContainerStyle == whole &&
+                RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 0, 0, crop, true).ContainerStyle == whole,
+                "An uncroppable or unmeasured preview did not fall back to the whole frame.");
+
+            // In the window, the measured box takes the crop's shape once the view has been laid out.
+            var projectPath = Path.Combine(root, "desktop-preview-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var clip = session.Project.Timeline.Single();
+            var active = clip.Crop ?? throw new Exception("Expected the prior crop edit.");
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.PlaybackCropStyle == whole, "The crop was applied before the view had been measured.");
+            // The measurement reads the laid-out document, so a frame has to have been laid out first.
+            document.DebugDump(1280, 800);
+            app.Present(1280, 800);
+            var shaped = model.PlaybackCropStyle;
+            Assert(shaped != whole && model.PlaybackFit == "contain",
+                $"The measured preview did not take the crop's shape: {shaped}");
+            using var debug = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+            var box = FindBox(debug.RootElement.GetProperty("tree"), "preview-crop");
+            var preview = FindBox(debug.RootElement.GetProperty("tree"), "preview");
+            Assert(Math.Abs(box[2] / box[3] - active.Width / (double)active.Height) < 0.01,
+                $"The rendered crop box is not the crop's shape: {box[2]:0.#}x{box[3]:0.#} for {active.Width}x{active.Height}.");
+            Assert(box[0] >= preview[0] - 0.5f && box[1] >= preview[1] - 0.5f &&
+                box[0] + box[2] <= preview[0] + preview[2] + 0.5f && box[1] + box[3] <= preview[1] + preview[3] + 0.5f,
+                "The crop box does not sit inside the preview area.");
+        });
+
         await check("Clip boundary geometry moves one edge and stays inside the source", () =>
         {
             const long source = 4000;

@@ -1,7 +1,7 @@
 # Desktop review
 
 - Added: 2026-09-19
-- Updated: 2026-09-24 (clip removal, the timeline transport and draggable boundaries)
+- Updated: 2026-09-24 (clip removal, the timeline transport, draggable boundaries and cropped playback)
 - Owner: Implementation agent
 - Review: When CupriFace changes, the proxy format changes or Linux acceptance begins
 
@@ -33,7 +33,7 @@ The RC-06 Windows desktop review surface uses CupriFace 0.26.1. It reads the sam
 
 **No video is rendered while editing.** RoughCut makes one preview copy of each source — a VP9/Opus WebM scaled to at most 720 lines, because the player decodes nothing else — keyed by the source fingerprint and cached under the ignored `.roughcut-preview` directory. The timeline is then approximated over that copy: selecting a row seeks to the matching source position, playback jumps at clip boundaries so cuts and reordering are visible, and a crop is shown by scaling the picture inside a clipped frame. Editing changes which parts of the copy play, never the copy itself, so a trim, split, reorder or crop costs nothing to preview. See [decision 0019](decisions/0019-approximated-preview-playback.md).
 
-This is deliberately an approximation, and it is labelled as one in the status line. Boundary jumps land on the decoder's nearest frame rather than exactly on the cut, audio is not gapless across a jump, and the copy is re-encoded, so it is not evidence of what export produces. Playing again after the timeline finishes starts it over. **Crop is not applied to the moving picture**: the exact rendered still shows the true crop, and the crop editor shows the rectangle, but approximate playback shows the whole frame. Scaling the player to the crop needs the preview box to take the crop aspect ratio, which this layout engine cannot express, and forcing it distorts the picture. It works for any source FFmpeg can decode, including the AV1/Opus material a URL fetch produces, which the validated export matrix rejects outright.
+This is deliberately an approximation, and it is labelled as one in the status line. Boundary jumps land on the decoder's nearest frame rather than exactly on the cut, audio is not gapless across a jump, and the copy is re-encoded, so it is not evidence of what export produces. Playing again after the timeline finishes starts it over. **A cropped clip plays cropped.** The preview copy is the whole source frame, so the crop is done by the view: the visible box takes the crop's shape, and while frames are running the picture inside it is enlarged and offset so the cropped region fills it. Both boxes come from one scale, so the picture keeps the source's aspect ratio rather than being stretched to fit, which is what an earlier attempt got wrong. Paused, nothing is enlarged: the poster is the exact rendered frame, already cropped, so both states frame the same region. An exact render already contains cropped pixels and is left alone. The box is computed from the preview's measured size, so it follows the window, and it falls back to the whole frame before the view has been laid out. See the [cropped playback evidence](evidence/2026-09-24-cropped-playback.md). It works for any source FFmpeg can decode, including the AV1/Opus material a URL fetch produces, which the validated export matrix rejects outright.
 
 ### Transport
 
