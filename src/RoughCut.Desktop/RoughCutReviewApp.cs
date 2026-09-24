@@ -21,6 +21,7 @@ public sealed class RoughCutReviewApp : CupriApp
     private long _playbackGeneration;
     private CropDragState? _cropDrag;
     private TransportDragState? _transportDrag;
+    private ClipDragState? _clipDrag;
     private long _transportShownAt;
     private string _transportPosition = "";
 
@@ -40,6 +41,9 @@ public sealed class RoughCutReviewApp : CupriApp
         int SourceWidth, int SourceHeight, double Scale);
 
     private sealed record TransportDragState(float TrackX, float TrackWidth);
+
+    private sealed record ClipDragState(string ClipId, ClipEdge Edge, long StartIn, long StartOut,
+        long SourceDuration, long MinimumTicks, double TicksPerPixel, float PointerX, long In, long Out);
 
     public override string Title => "RoughCut Review";
     private static readonly byte[] ApplicationIcon = LoadIcon();
@@ -98,6 +102,7 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".transport-mute", _ => ToggleMute());
         document.OnPointer("data-transport", HandleTransportPointer);
         document.OnPointer("data-crop-drag", HandleCropPointer);
+        document.OnPointer("data-clip-drag", HandleClipPointer);
         document.OnClick(".recent-open", e => OpenProject(Required(e, "data-path")));
         document.OnClick(".open-path", _ => OpenOrCreate(_model.OpenPath));
         document.OnClick(".browse", _ => Browse(create: false));
@@ -657,6 +662,61 @@ public sealed class RoughCutReviewApp : CupriApp
         return true;
     }
 
+    /// A boundary drag moves one edge of one clip. The clip's own rendered width gives the scale, so the
+    /// mapping stays right whatever the layout does to a very short clip.
+    private bool HandleClipPointer(MultiPointerEvent pointer)
+    {
+        if (_session is null) return false;
+        if (pointer.Phase == PointerPhase.Down)
+        {
+            if (_work.IsBusy || _clipDrag is not null || pointer.Pointers.Count != 1 ||
+                pointer.Element?.GetAttribute("data-id") is not { Length: > 0 } clipId ||
+                pointer.Value is not ("start" or "end") ||
+                Session.Project.Timeline.FirstOrDefault(item => item.Id == clipId) is not { } clip ||
+                Session.Project.Assets.FirstOrDefault(item => item.Id == clip.AssetId) is not { Kind: "video" } asset ||
+                _document?.HitTest(pointer.X, pointer.Y) is not { } node ||
+                Ancestor(node, "data-clip-box") is not { Width: > 0 } body)
+                return false;
+            var timeBase = Session.Project.TimeBase;
+            _clipDrag = new(clipId, pointer.Value == "start" ? ClipEdge.Start : ClipEdge.End,
+                clip.In, clip.Out, asset.Duration, ClipDragGeometry.MinimumTicks(timeBase),
+                (clip.Out - clip.In) / (double)body.Width, pointer.X, clip.In, clip.Out);
+            _model.Status = "Drag the clip boundary and release to save.";
+            _document?.Refresh();
+            return true;
+        }
+
+        if (_clipDrag is not { } drag) return false;
+        if (pointer.Phase == PointerPhase.Cancel)
+        {
+            _clipDrag = null;
+            _model.Status = "Boundary drag canceled.";
+            _document?.Refresh();
+            return true;
+        }
+        var (start, end) = ClipDragGeometry.Update(drag.StartIn, drag.StartOut, drag.Edge,
+            (pointer.X - drag.PointerX) * drag.TicksPerPixel, drag.SourceDuration, drag.MinimumTicks);
+        _clipDrag = drag with { In = start, Out = end };
+        // The pending interval is shown while dragging; only release spends a revision on it.
+        _model.ClipSummary = FormattableString.Invariant(
+            $"{drag.ClipId} · pending source {start}–{end}");
+        _model.TrimIn = start.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.TrimOut = end.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (pointer.Phase == PointerPhase.Up)
+        {
+            _clipDrag = null;
+            if (start == drag.StartIn && end == drag.StartOut)
+            {
+                _model.Status = "Ready";
+                Rebuild(preserveStatus: true);
+            }
+            else StartCommand(() => Session.TrimClipAsync(drag.ClipId, start, end),
+                seekAfter: true, rebuildPlayback: true);
+        }
+        _document?.Refresh();
+        return true;
+    }
+
     private bool TryCropContext(out MediaAsset asset, out Crop crop)
     {
         if (_session is null)
@@ -782,12 +842,18 @@ public sealed class RoughCutReviewApp : CupriApp
             CssClass = item.Id == Session.SelectedSegmentId ? "selected" : ""
         }).ToArray();
         // Mapping is prepared by the session, so an unopenable project cannot throw from the view.
-        _model.Clips = Session.Mapping.Take(200).Select(item => new ClipRow
+        // Clips take their share of the row, so the timeline reads as the edit's shape and a boundary
+        // drag moves a distance that matches what it changes.
+        var mapped = Session.Mapping.Take(200).ToArray();
+        var total = mapped.Sum(item => (double)(item.OutputOut - item.OutputIn));
+        _model.Clips = mapped.Select(item => new ClipRow
         {
             Id = item.ClipId,
             Range = $"{FormatTime(item.OutputIn, project.TimeBase)}–{FormatTime(item.OutputOut, project.TimeBase)}",
             Source = item.AssetId,
-            CssClass = item.ClipId == Session.SelectedClipId ? "selected" : ""
+            CssClass = item.ClipId == Session.SelectedClipId ? "selected" : "",
+            Style = FormattableString.Invariant(
+                $"flex-grow:{(total > 0 ? (item.OutputOut - item.OutputIn) / total * mapped.Length : 1):0.###}")
         }).ToArray();
         // A proposal whose observation is missing is skipped rather than allowed to break the whole view.
         _model.Evidence = project.Proposals.Take(100)
@@ -884,7 +950,7 @@ public sealed class RoughCutReviewApp : CupriApp
                 </div>
                 <div class="timeline-card">
                   <div class="section-title">Timeline</div>
-                  <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></button></div>
+                  <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}" data-clip-box="{{Id}}" style="{{Style}}"><span class="clip-edge start" data-clip-drag="start" data-id="{{Id}}"></span><span class="clip-body"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></span><span class="clip-edge end" data-clip-drag="end" data-id="{{Id}}"></span></button></div>
                   <div class="clip-editor {{ClipEditorClass}}">
                     <div class="clip-summary">{{ClipSummary}} · {{SplitSummary}}</div>
                     <div class="clip-controls"><label><span>IN</span><cupri-textfield value="{{TrimIn}}"></cupri-textfield></label><label><span>OUT</span><cupri-textfield value="{{TrimOut}}"></cupri-textfield></label><div class="clip-actions"><cupri-button class="apply-trim">Apply trim</cupri-button><cupri-button class="split-clip {{SplitClass}}" variant="ghost">Split</cupri-button><cupri-button class="remove-clip {{RemoveClass}}" variant="ghost">Remove</cupri-button><cupri-button class="move-earlier {{MoveEarlierClass}}" variant="ghost">Earlier</cupri-button><cupri-button class="move-later {{MoveLaterClass}}" variant="ghost">Later</cupri-button></div></div>
@@ -956,7 +1022,12 @@ public sealed class RoughCutReviewApp : CupriApp
         .preview-meta { padding:10px 4px 0; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; } .preview-meta strong { color:var(--text); }
         .section-title { padding:12px 14px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px; font-size:11px; font-weight:bold; }
         .timeline { display:flex; gap:6px; padding:0 12px 12px; overflow:hidden; }
-        .clip { min-width:112px; flex:1; padding:9px; border:0; border-radius:7px; background:var(--panel2); border-top:3px solid var(--accent); display:flex; flex-direction:column; gap:3px; text-align:left; cursor:pointer; }
+        /* The boundary handles are laid out beside the labels rather than over them: an absolutely
+           positioned child is offset from the content box here, so it would sit on the clip's own text. */
+        .clip { min-width:112px; flex:1 1 0; padding:0; border:0; border-radius:7px; background:var(--panel2); border-top:3px solid var(--accent); display:flex; align-items:stretch; text-align:left; cursor:pointer; overflow:hidden; }
+        .clip-body { flex:1 1 0; min-width:0; padding:9px 6px; display:flex; flex-direction:column; gap:3px; }
+        .clip-edge { flex:0 0 10px; width:10px; cursor:ew-resize; background:#ff9f4355; }
+        .clip:hover .clip-edge,.clip.selected .clip-edge { background:var(--accent); }
         .clip:hover,.clip.selected { background:#263249; }
         .clip span,.clip small { color:var(--muted); font-size:10px; }
         .evidence-card { max-height:150px; overflow:hidden; padding-bottom:8px; } .empty { color:var(--muted); font-size:11px; padding:0 14px 8px; }
@@ -1054,5 +1125,5 @@ public sealed partial class ReviewModel
 [CupriBindable] public sealed partial class RecentRow { public string Path { get; set; } = ""; public string Name { get; set; } = ""; public string Folder { get; set; } = ""; public string ProjectId { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeakerRow { public string Id { get; set; } = ""; public string Label { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeechRow { public string Id { get; set; } = ""; public string Time { get; set; } = ""; public string Speaker { get; set; } = ""; public string Text { get; set; } = ""; public string Badge { get; set; } = ""; public string CssClass { get; set; } = ""; }
-[CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; public string CssClass { get; set; } = ""; }
+[CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; public string CssClass { get; set; } = ""; public string Style { get; set; } = ""; }
 [CupriBindable] public sealed partial class EvidenceRow { public string Id { get; set; } = ""; public string Decision { get; set; } = ""; public string Summary { get; set; } = ""; }

@@ -598,6 +598,91 @@ internal static class DesktopTests
             return Task.CompletedTask;
         });
 
+        await check("Clip boundary geometry moves one edge and stays inside the source", () =>
+        {
+            const long source = 4000;
+            var minimum = RoughCut.Desktop.ClipDragGeometry.MinimumTicks(new(1, 1000));
+            Assert(minimum == 20, "The shortest draggable clip should be twenty milliseconds at a 1/1000 time base.");
+            Assert(RoughCut.Desktop.ClipDragGeometry.MinimumTicks(new(1, 25)) == 1,
+                "A coarse time base should fall back to one tick.");
+
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.Start,
+                    250, source, minimum) == (1250L, 3000L),
+                "Dragging the start did not move only the in point.");
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    -250.4, source, minimum) == (1000L, 2750L),
+                "Dragging the end did not move only the out point.");
+
+            // Neither edge may pass the other, leave the source, or produce a clip too short to see.
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.Start,
+                    -5000, source, minimum) == (0L, 3000L) &&
+                RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.Start,
+                    5000, source, minimum) == (2980L, 3000L) &&
+                RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    5000, source, minimum) == (1000L, 4000L) &&
+                RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    -5000, source, minimum) == (1000L, 1020L),
+                "A boundary drag escaped the source or inverted the clip.");
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    double.NaN, source, minimum) == (1000L, 3000L),
+                "An unmeasurable drag changed the clip.");
+            Throws<ArgumentOutOfRangeException>(() => RoughCut.Desktop.ClipDragGeometry.Update(
+                3000, 1000, RoughCut.Desktop.ClipEdge.End, 10, source, minimum));
+            Throws<ArgumentOutOfRangeException>(() => RoughCut.Desktop.ClipDragGeometry.Update(
+                0, 5000, RoughCut.Desktop.ClipEdge.End, 10, source, minimum));
+            return Task.CompletedTask;
+        });
+
+        await check("Dragging a clip boundary persists one revisioned trim", async () =>
+        {
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
+            var half = info.DurationTicks / 2;
+            var projectPath = Path.Combine(root, "desktop-boundary-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-boundary",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                // A long clip and a short one, so the row's shares can be told apart.
+                Timeline = [new("long", "source", 0, half), new("short", "source", half, half + half / 4)]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            using var document = new RoughCut.Desktop.RoughCutReviewApp(session).CreateDocument();
+            document.Refresh();
+            using var debug = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+            var longBox = FindBox(debug.RootElement.GetProperty("tree"), "clip selected");
+            var shortBox = FindBox(debug.RootElement.GetProperty("tree"), "clip ");
+            Assert(longBox[2] > shortBox[2] + 20,
+                $"Clips do not take their share of the timeline: {longBox[2]:0.#} against {shortBox[2]:0.#}.");
+
+            // Drag the long clip's end boundary left by a tenth of its width: a tenth of its duration.
+            var edge = FindBox(debug.RootElement.GetProperty("tree"), "clip-edge end");
+            var x = edge[0] + edge[2] / 2;
+            var y = edge[1] + edge[3] / 2;
+            var moved = longBox[2] / 10;
+            var revision = session.Project.Revision;
+            Assert(document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Down, x, y),
+                $"The clip boundary did not capture the pointer; its handle measured {edge[2]:0.#}x{edge[3]:0.#}.");
+            Assert(document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Move, x - moved, y) &&
+                document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Up, x - moved, y),
+                "The captured boundary drag was not handled through release.");
+            var expected = half - (long)Math.Round(half / 10.0, MidpointRounding.AwayFromZero);
+            var timeout = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (session.Project.Revision == revision && DateTime.UtcNow < timeout) await Task.Delay(25);
+            var saved = await new ProjectStore().LoadAsync(projectPath);
+            Assert(saved.Revision == revision + 1 && saved.Timeline[0].In == 0 &&
+                Math.Abs(saved.Timeline[0].Out - expected) <= 2 && saved.Timeline[1].In == half,
+                $"The drag did not trim only the dragged edge: {saved.Timeline[0].Out} against {expected}.");
+
+            await session.UndoAsync();
+            Assert(session.Project.Timeline[0].Out == half && !session.CanUndo,
+                "Undo did not restore the boundary the drag moved.");
+        });
+
         await check("Desktop crop handle drag persists one revisioned edit", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-preview-project.json");

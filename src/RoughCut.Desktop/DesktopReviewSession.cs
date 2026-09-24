@@ -340,10 +340,17 @@ public sealed class DesktopReviewSession
     }
 
     // Uses set-range rather than trim so the reviewer can restore retained source material and undo stays exact.
-    public async Task TrimSelectedClipAsync(long inTicks, long outTicks, CancellationToken token = default)
+    public Task TrimSelectedClipAsync(long inTicks, long outTicks, CancellationToken token = default) =>
+        TrimClipAsync(RequireSelectedVideoClip("trimmed").Id, inTicks, outTicks, token);
+
+    /// Trims a named clip, for the timeline's draggable boundaries: the drag knows which edge of which clip
+    /// it moved, not which clip happens to be selected.
+    public async Task TrimClipAsync(string clipId, long inTicks, long outTicks, CancellationToken token = default)
     {
-        var clip = RequireSelectedVideoClip("trimmed");
+        var clip = Project.Timeline.SingleOrDefault(item => item.Id == clipId)
+            ?? throw new InvalidOperationException("That clip is no longer on the timeline.");
         var asset = Project.Assets.Single(item => item.Id == clip.AssetId);
+        if (asset.Kind != "video") throw new InvalidOperationException("Only video clips can be trimmed in desktop review.");
         if (inTicks < 0 || inTicks >= outTicks || outTicks > asset.Duration)
             throw new InvalidOperationException("A trim must keep a nonempty interval inside the source.");
         if (clip.In == inTicks && clip.Out == outTicks) return;
