@@ -358,6 +358,59 @@ internal static class ExportTests
             var report = await exporter.ExportAsync(path, Path.Combine(root, "h264 result"), allowEncoding: true);
             Assert(report.Plan.Streams[0].Action == "encode" && report.Validation.DecodedFrames == 20, "Encoded H.264 cut failed validation.");
         });
+        await check("Copy anchors are read from a bounded window, not a whole-file index", async () =>
+        {
+            // Ten seconds at 10 fps with a keyframe every two seconds, so the anchors are known in advance.
+            var anchored = Path.Combine(root, "anchored.mkv");
+            await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-f", "lavfi",
+                "-i", "testsrc2=size=160x96:rate=10:duration=10", "-f", "lavfi",
+                "-i", "sine=frequency=440:sample_rate=48000:duration=10", "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-g", "20", "-keyint_min", "20", "-sc_threshold", "0", "-pix_fmt", "yuv420p",
+                "-threads:v", "1", "-c:a", "libopus", "-b:a", "96k", "-n", anchored]);
+            var project = new EditProject
+            {
+                ProjectId = "anchors",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "anchored.mkv", await MediaReader.FingerprintAsync(anchored),
+                    10000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 10000)]
+            };
+            var path = Path.Combine(root, "anchors-project.json");
+            await store.SaveAsync(path, project, 0);
+
+            var reader = new CutPointReader(ffprobe);
+            var points = await reader.ReadAsync(project, path, "source", 5300);
+            Assert(Math.Abs(points.KeyframeIntervalSeconds - 2) < 0.15,
+                $"The source's own keyframe spacing was not measured: {points.KeyframeIntervalSeconds:0.###}s.");
+            Assert(points.Before is { Ticks: 4000, OffsetTicks: -1300 } && points.After is { Ticks: 6000, OffsetTicks: 700 },
+                "The anchors either side of the requested time are wrong: " +
+                $"{points.Before?.Ticks} and {points.After?.Ticks}.");
+            Assert(points.Anchors.Length >= 3 && points.Anchors.All(anchor => anchor.Ticks % 2000 == 0) &&
+                points.Anchors.Select(anchor => anchor.Ticks).SequenceEqual(points.Anchors.Select(anchor => anchor.Ticks).Order()),
+                "The anchors are not the source's keyframes in order.");
+            // Alignment is reported where audio was read and left unknown outside it, rather than guessed.
+            Assert(points.AudioPacketSeconds > 0 &&
+                points.Anchors.Where(anchor => anchor.Seconds >= 4 && anchor.Seconds <= 6).All(anchor => anchor.AudioAligned == true) &&
+                points.Anchors.Any(anchor => anchor.AudioAligned is null),
+                "Audio packet alignment was not reported, or was claimed outside the sampled audio.");
+            Assert(points.Guidance.Contains("re-encoding", StringComparison.Ordinal),
+                "The report does not say what cutting exactly would cost.");
+
+            // A request exactly on an anchor offers it as both neighbours: copying there costs nothing.
+            var exact = await reader.ReadAsync(project, path, "source", 6000);
+            Assert(exact.Before is { Ticks: 6000, OffsetTicks: 0 } && exact.After is { Ticks: 6000, OffsetTicks: 0 },
+                "A time already on a keyframe was not reported as a free cut.");
+
+            // An explicit window is honoured. A window too narrow to reach the next keyframe still reports
+            // the one behind, because reading an interval starts at the keyframe preceding it: copying can
+            // always begin there, and only the anchor ahead is out of view.
+            var narrow = await reader.ReadAsync(project, path, "source", 5300, 1000);
+            Assert(narrow.WindowTicks == 1000 && narrow.Before is { Ticks: 4000 } && narrow.After is null,
+                "A narrow window did not report the anchor behind, or invented one ahead.");
+            await Throws<ArgumentOutOfRangeException>(() => reader.ReadAsync(project, path, "source", 20000));
+            await Throws<KeyNotFoundException>(() => reader.ReadAsync(project, path, "absent", 1000));
+        });
+
         await check("Delivery renders a timeline the strict matrix refuses, in order and at the claimed length", async () =>
         {
             // H.264 video with AAC audio in MP4: ordinary acquired material, outside the validated copy matrix.

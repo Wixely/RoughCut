@@ -426,21 +426,38 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return DeliveryExporter.Plan(await _store.LoadAsync(path, token), path);
     }
 
+    /// Where a stream copy may begin or end near a requested time in one source, read from a bounded
+    /// window rather than a whole-file index.
+    public async Task<CutPoints> ListCutPointsAsync(string projectPath, string assetId, long atTicks,
+        long? windowTicks = null, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        return await new CutPointReader(ffprobe).ReadAsync(await _store.LoadAsync(path, token), path,
+            assetId, atTicks, windowTicks, token);
+    }
+
     public Task<TimelineFrame> GetTimelineFrameAsync(string projectPath, long expectedRevision, long timelineTicks,
         int maxWidth, CancellationToken token = default)
         => new TimelinePreviewer(ffmpeg, ffprobe).GetFrameAsync(workspace.Resolve(projectPath), expectedRevision,
             timelineTicks, maxWidth, token);
 
+    /// What a source offers, without downloading it, so a caller can choose a rendition rather than
+    /// inheriting whatever the downloader would have picked.
+    public Task<SourceFormatList> ListSourceFormatsAsync(string sourceUrl, string? denoPath = null,
+        CancellationToken token = default)
+        => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool).ListFormatsAsync(sourceUrl, denoPath, token);
+
     public Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
-        string? denoPath = null, CancellationToken token = default)
-        => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool).AcquireAsync(sourceUrl, destinationDirectory, denoPath, token);
+        string? denoPath = null, CancellationToken token = default, string? format = null)
+        => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool).AcquireAsync(sourceUrl, destinationDirectory, denoPath, token, format);
 
     /// Acquires one URL with its subtitles, creates a project beside the downloaded media and selects the
     /// best caption track. Keeps the whole URL-to-project sequence in one place so hosts cannot diverge.
     public async Task<UrlProjectResult> CreateProjectFromUrlAsync(string sourceUrl, string destinationDirectory,
-        string? denoPath = null, string preferredLanguage = "en", CancellationToken token = default)
+        string? denoPath = null, string preferredLanguage = "en", CancellationToken token = default,
+        string? format = null)
     {
-        var acquisition = await AcquireAsync(sourceUrl, destinationDirectory, denoPath, token);
+        var acquisition = await AcquireAsync(sourceUrl, destinationDirectory, denoPath, token, format);
         // The media must stay inside the project directory, so the project is written into the acquired folder.
         var directory = workspace.Resolve(destinationDirectory);
         var inner = new RoughCutOperations(new WorkspaceBoundary(directory), ffmpeg, ffprobe, ytDlp, acquisitionTool);

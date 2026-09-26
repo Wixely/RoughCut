@@ -42,8 +42,10 @@ try
                   voice-synthesize <project.json> <expected-revision> <replacement-id>
                   voice-preview <project.json> <expected-revision> <replacement-id> <new-output.wav>
                   voice-state <project.json> <expected-revision> <replacement-id> <applied|reverted>
-                  acquire <url> <new-output-directory> [deno-executable]
-                  create-url <url> <new-output-directory> [deno-executable]
+                  formats <url>
+                  acquire <url> <new-output-directory> [--format <id|highest|medium|lowest>] [deno-executable]
+                  create-url <url> <new-output-directory> [--format <id|highest|medium|lowest>] [deno-executable]
+                  cut-points <project.json> <asset-id> <seconds> [window-seconds]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
                   preflight-delivery <project.json>
@@ -89,12 +91,20 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
-        case ["acquire", var sourceUrl, var destination, .. var acquisitionOptions] when acquisitionOptions.Length <= 1:
+        case ["formats", var sourceUrl, .. var formatOptions] when formatOptions.Length <= 1:
+            {
+                var listed = await new YtDlpAcquirer(new WorkspaceBoundary(Environment.CurrentDirectory), ytDlp)
+                    .ListFormatsAsync(sourceUrl, formatOptions.FirstOrDefault() ?? tools.Deno, token);
+                Console.WriteLine(JsonSerializer.Serialize(listed, ApplicationJson.Default.SourceFormatList));
+                break;
+            }
+        case ["acquire", var sourceUrl, var destination, .. var acquisitionOptions] when acquisitionOptions.Length <= 3:
             {
                 var fullDestination = Path.GetFullPath(destination);
                 var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
                 var result = await new YtDlpAcquirer(boundary, ytDlp).AcquireAsync(sourceUrl,
-                    Path.GetFileName(fullDestination), acquisitionOptions.FirstOrDefault() ?? tools.Deno, token);
+                    Path.GetFileName(fullDestination), Deno(acquisitionOptions) ?? tools.Deno, token,
+                    Option(acquisitionOptions, "--format"));
                 Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.AcquisitionResult));
                 break;
             }
@@ -237,6 +247,17 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
+        case ["cut-points", var path, var assetId, var secondsText, .. var cutOptions] when cutOptions.Length <= 1:
+            {
+                var project = await store.LoadAsync(path, token);
+                long Ticks(string text) => (long)Math.Round(
+                    decimal.Parse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture) *
+                    project.TimeBase.Denominator / project.TimeBase.Numerator, MidpointRounding.AwayFromZero);
+                var points = await new CutPointReader(ffprobe).ReadAsync(project, path, assetId, Ticks(secondsText),
+                    cutOptions.Length == 1 ? Ticks(cutOptions[0]) : null, token);
+                Console.WriteLine(JsonSerializer.Serialize(points, MediaJson.Default.CutPoints));
+                break;
+            }
         case ["preflight", var path]:
             {
                 var plan = await new ExportPlanner(ffmpeg, ffprobe).PreflightAsync(await store.LoadAsync(path, token), path, token);
@@ -282,13 +303,13 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(project, ProjectJson.Default.EditProject));
                 break;
             }
-        case ["create-url", var sourceUrl, var destination, .. var urlOptions] when urlOptions.Length <= 1:
+        case ["create-url", var sourceUrl, var destination, .. var urlOptions] when urlOptions.Length <= 3:
             {
                 var fullDestination = Path.GetFullPath(destination);
                 var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
                 var operations = new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp);
                 var result = await operations.CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(fullDestination),
-                    urlOptions.FirstOrDefault() ?? tools.Deno, token: token);
+                    Deno(urlOptions) ?? tools.Deno, token: token, format: Option(urlOptions, "--format"));
                 Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.UrlProjectResult));
                 break;
             }
@@ -372,4 +393,17 @@ catch (Exception exception) when (exception is IOException or ArgumentException 
         _ => "Operation failed; check arguments, file access, output collisions and media-tool availability."
     });
     return 2;
+}
+
+// Trailing options: a named --format value, and whatever else is left is the Deno path.
+static string? Option(string[] options, string name)
+{
+    var index = Array.IndexOf(options, name);
+    return index >= 0 && index + 1 < options.Length ? options[index + 1] : null;
+}
+
+static string? Deno(string[] options)
+{
+    var format = Option(options, "--format");
+    return options.FirstOrDefault(option => option != "--format" && option != format);
 }

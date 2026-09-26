@@ -7,7 +7,9 @@ namespace RoughCut.Application;
 
 public sealed record AcquiredCaption(string Path, string Language, string SourceKind, string Sha256, int CueCount);
 public sealed record AcquisitionResult(int SchemaVersion, string Source, string Extractor, string MediaId, string Title,
-    string MediaPath, string MediaSha256, string InfoPath, AcquiredCaption[] Captions, string YtDlpVersion);
+    string MediaPath, string MediaSha256, string InfoPath, AcquiredCaption[] Captions, string YtDlpVersion,
+    // Absent in manifests written before the caller could choose a rendition.
+    FormatChoice? Format = null);
 
 public interface IAcquisitionTool
 {
@@ -24,31 +26,101 @@ public sealed class AcquisitionTool : IAcquisitionTool
 public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable = "yt-dlp", IAcquisitionTool? tool = null)
 {
     private const long MaxAggregateBytes = 600L * 1024 * 1024;
+    /// What one download may fetch. Selection is held to this before anything starts, so the size bound
+    /// refuses a rendition rather than aborting a download that has already written most of a file.
+    public const long MaxDownloadBytes = 512L * 1024 * 1024;
     private readonly IAcquisitionTool _tool = tool ?? new AcquisitionTool();
 
-    public async Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
-        string? denoPath = null, CancellationToken cancellationToken = default)
+    /// What the source offers, without downloading any of it. The caller picks from this, by identifier or
+    /// by one of the named policies.
+    public async Task<SourceFormatList> ListFormatsAsync(string sourceUrl, string? denoPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        var uri = ValidatedSource(sourceUrl);
+        denoPath = ValidatedDeno(denoPath);
+        var arguments = new List<string>
+        {
+            "--ignore-config", "--no-remote-components", "--no-playlist", "--skip-download", "--dump-single-json"
+        };
+        if (denoPath is not null) arguments.AddRange(["--js-runtimes", "deno:" + denoPath]);
+        arguments.AddRange(["--", uri.AbsoluteUri]);
+        var result = await _tool.RunAsync(executable, arguments, cancellationToken);
+        using var document = JsonDocument.Parse(result.Output, new JsonDocumentOptions { MaxDepth = 32 });
+        var root = document.RootElement;
+        var formats = new List<SourceFormat>();
+        if (root.TryGetProperty("formats", out var listed) && listed.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var format in listed.EnumerateArray().Take(400))
+            {
+                var id = Text(format, "format_id");
+                if (id is null || id.Length > 32) continue;
+                var video = Text(format, "vcodec") ?? "none";
+                var audio = Text(format, "acodec") ?? "none";
+                // Storyboards and other pictureless, soundless entries are not renditions of the media.
+                if (video == "none" && audio == "none") continue;
+                var kind = video != "none" && audio != "none" ? "muxed" : video != "none" ? "video" : "audio";
+                formats.Add(new(id, Text(format, "ext") ?? "", kind, Number(format, "width"), Number(format, "height"),
+                    Decimal(format, "fps"), video, audio, Decimal(format, "tbr"),
+                    (long)Math.Max(Decimal(format, "filesize"), Decimal(format, "filesize_approx"))));
+            }
+        }
+        if (formats.Count == 0) throw new InvalidDataException("The source declared no downloadable formats.");
+        var safeSource = new UriBuilder(uri) { Query = "", Fragment = "" }.Uri.AbsoluteUri;
+        return new(1, safeSource, Text(root, "title") ?? "", Decimal(root, "duration"),
+            MaxDownloadBytes, formats.ToArray(), SourceFormatPolicy.Policies);
+    }
+
+    private static string? Text(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static int Number(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number &&
+        value.TryGetInt32(out var parsed) ? parsed : 0;
+
+    private static double Decimal(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number &&
+        value.TryGetDouble(out var parsed) ? parsed : 0;
+
+    private static Uri ValidatedSource(string sourceUrl)
     {
         if (!Uri.TryCreate(sourceUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") ||
             !string.IsNullOrEmpty(uri.UserInfo)) throw new ArgumentException("Source must be an HTTP(S) URL without embedded credentials.");
+        return uri;
+    }
+
+    private static string? ValidatedDeno(string? denoPath)
+    {
+        if (denoPath is null) return null;
+        denoPath = Path.GetFullPath(denoPath);
+        if (!File.Exists(denoPath)) throw new FileNotFoundException("Configured Deno executable does not exist.");
+        return denoPath;
+    }
+
+    /// `format` is a format identifier from ListFormatsAsync, two joined by '+', or one of the named
+    /// policies. It defaults to the middle rendition rather than the largest.
+    public async Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
+        string? denoPath = null, CancellationToken cancellationToken = default, string? format = null)
+    {
+        var uri = ValidatedSource(sourceUrl);
         var destination = workspace.Resolve(destinationDirectory, mustExist: false);
         if (File.Exists(destination) || Directory.Exists(destination)) throw new IOException("Acquisition destination already exists.");
-        if (denoPath is not null)
-        {
-            denoPath = Path.GetFullPath(denoPath);
-            if (!File.Exists(denoPath)) throw new FileNotFoundException("Configured Deno executable does not exist.");
-        }
+        denoPath = ValidatedDeno(denoPath);
+        // Choosing before downloading: the rendition, its size and the reason are settled while nothing has
+        // been written, so an unaffordable choice is refused instead of aborting mid-file.
+        var choice = SourceFormatPolicy.Choose(
+            await ListFormatsAsync(uri.AbsoluteUri, denoPath, cancellationToken), format, MaxDownloadBytes);
+        cancellationToken.ThrowIfCancellationRequested();
         var parent = Path.GetDirectoryName(destination)!;
         Directory.CreateDirectory(parent);
         var staging = Path.Combine(parent, ".roughcut-acquire-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(staging);
         try
         {
-            var arguments = BuildArguments(uri, staging, denoPath);
+            var arguments = BuildArguments(uri, staging, denoPath, choice.Expression);
             await _tool.RunAsync(executable, arguments, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var version = System.Text.Encoding.UTF8.GetString((await _tool.RunAsync(executable, ["--ignore-config", "--version"], cancellationToken)).Output).Trim();
-            var result = await InspectAsync(uri, staging, version, cancellationToken);
+            var result = await InspectAsync(uri, staging, version, cancellationToken) with { Format = choice };
             await File.WriteAllTextAsync(Path.Combine(staging, "acquisition.json"),
                 JsonSerializer.Serialize(result, ApplicationJson.Default.AcquisitionResult), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -58,7 +130,7 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
         finally { Cleanup(staging); }
     }
 
-    internal static string[] BuildArguments(Uri source, string staging, string? denoPath)
+    internal static string[] BuildArguments(Uri source, string staging, string? denoPath, string formatExpression)
     {
         // Deliberately no --no-js-runtimes: that clears yt-dlp's default Deno entry, which silently costs
         // format availability on YouTube. yt-dlp already disables Node, QuickJS and Bun by default, so the
@@ -69,7 +141,7 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
             "--no-overwrites", "--no-progress", "--newline", "--write-info-json", "--write-subs", "--write-auto-subs",
             "--sub-langs", "en,-live_chat", "--sub-format", "srt/best", "--convert-subs", "srt",
             "--merge-output-format", "mkv", "--remux-video", "mkv", "--paths", staging,
-            "--output", "source.%(ext)s"
+            "--output", "source.%(ext)s", "--format", formatExpression
         };
         // An explicit path pins which Deno runs; without one yt-dlp finds Deno on PATH or beside its executable.
         if (denoPath is not null) arguments.AddRange(["--js-runtimes", "deno:" + denoPath]);
@@ -94,9 +166,22 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
         var extractor = RequiredText(root, "extractor", 128);
         var manualLanguages = Languages(root, "subtitles");
         var automaticLanguages = Languages(root, "automatic_captions");
-        var media = files.SingleOrDefault(file => Path.GetFileName(file).StartsWith("source.", StringComparison.Ordinal) &&
-            !file.EndsWith(".json", StringComparison.OrdinalIgnoreCase) && !file.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidDataException("Acquisition did not produce exactly one media file.");
+        // A `.part` file is an aborted download, not media. Counting one as media produced an unreadable
+        // project; matching it alongside the real file produced an unreadable error.
+        var partial = files.Where(file => file.EndsWith(".part", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (partial.Length > 0)
+            throw new InvalidDataException("The download did not complete: " +
+                string.Join(", ", partial.Select(Path.GetFileName)) +
+                " is a partial file, so the chosen rendition exceeded the download bound or the transfer was interrupted.");
+        var candidates = files.Where(file => Path.GetFileName(file).StartsWith("source.", StringComparison.Ordinal) &&
+            !file.EndsWith(".json", StringComparison.OrdinalIgnoreCase) &&
+            !file.EndsWith(".srt", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (candidates.Length != 1)
+            throw new InvalidDataException(candidates.Length == 0
+                ? "Acquisition produced no media file."
+                : "Acquisition produced more than one media file: " +
+                  string.Join(", ", candidates.Select(Path.GetFileName)) + ".");
+        var media = candidates[0];
         var captions = new List<AcquiredCaption>();
         foreach (var caption in files.Where(file => Path.GetFileName(file).StartsWith("source.", StringComparison.Ordinal) &&
             file.EndsWith(".srt", StringComparison.OrdinalIgnoreCase)).OrderBy(file => file, StringComparer.Ordinal))

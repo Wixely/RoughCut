@@ -15,6 +15,7 @@ internal sealed record VideoIndex(VideoInfo Info, DecodedFrame[] Frames);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(VideoInfo))]
+[JsonSerializable(typeof(CutPoints))]
 public partial class MediaJson : JsonSerializerContext;
 
 public sealed class MediaReader(string ffmpeg = "ffmpeg", string ffprobe = "ffprobe")

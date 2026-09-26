@@ -194,20 +194,31 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
             () => operations.SetVoiceStateAsync(projectPath, expectedRevision, replacementId, state, cancellationToken),
             ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_list_source_formats", ReadOnly = true)]
+    [Description("List the renditions a source URL offers — identifier, size, bitrate, resolution and codecs — without downloading any of them. Choose one and pass its identifier to an acquisition, or pass a policy name: highest, medium or lowest bitrate within the download bound.")]
+    public Task<CallToolResult> ListSourceFormatsAsync(string sourceUrl, CancellationToken cancellationToken,
+        string? denoPath = null)
+        => TextAsync(() => operations.ListSourceFormatsAsync(sourceUrl, denoPath ?? ToolSettings.Default.Deno,
+            cancellationToken), ApplicationJson.Default.SourceFormatList);
+
     [McpServerTool(Name = "roughcut_acquire_url")]
     [Description("Acquire one HTTP(S) video plus available subtitles through a configured standalone yt-dlp into a new bounded workspace directory.")]
     public Task<CallToolResult> AcquireAsync(string sourceUrl, string destinationDirectory,
-        CancellationToken cancellationToken, string? denoPath = null)
+        CancellationToken cancellationToken, string? denoPath = null,
+        [Description("A format identifier from roughcut_list_source_formats, two joined by '+', or a policy: highest, medium or lowest. Defaults to medium.")]
+        string? format = null)
         => TextAsync(() => operations.AcquireAsync(sourceUrl, destinationDirectory,
-            denoPath ?? ToolSettings.Default.Deno, cancellationToken),
+            denoPath ?? ToolSettings.Default.Deno, cancellationToken, format),
             ApplicationJson.Default.AcquisitionResult);
 
     [McpServerTool(Name = "roughcut_create_project_from_url")]
     [Description("Acquire one HTTP(S) video plus its subtitles, create a project beside the downloaded media and select the best caption track, in one bounded step. Use this instead of composing acquire, create and select_captions by hand; the yt-dlp subtitle and format policy is fixed by RoughCut.")]
     public Task<CallToolResult> CreateProjectFromUrlAsync(string sourceUrl, string destinationDirectory,
-        CancellationToken cancellationToken, string? denoPath = null, string preferredLanguage = "en")
+        CancellationToken cancellationToken, string? denoPath = null, string preferredLanguage = "en",
+        [Description("A format identifier from roughcut_list_source_formats, two joined by '+', or a policy: highest, medium or lowest. Defaults to medium.")]
+        string? format = null)
         => TextAsync(() => operations.CreateProjectFromUrlAsync(sourceUrl, destinationDirectory,
-            denoPath ?? ToolSettings.Default.Deno, preferredLanguage, cancellationToken),
+            denoPath ?? ToolSettings.Default.Deno, preferredLanguage, cancellationToken, format),
             ApplicationJson.Default.UrlProjectResult);
 
     [McpServerTool(Name = "roughcut_transcribe_local")]
@@ -233,6 +244,15 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         long expectedRevision, CancellationToken cancellationToken, string provider = "mcp-client", string modelVersion = "unspecified")
         => TextAsync(() => operations.ImportPngAsync(projectPath, assetId, base64Png, expectedRevision,
             provider, modelVersion, cancellationToken), ProjectJson.Default.EditProject);
+
+    [McpServerTool(Name = "roughcut_list_cut_points", ReadOnly = true)]
+    [Description("List where a stream copy may begin or end near a time in one source: the keyframe anchors behind and ahead, how far each sits from the time you asked for, whether audio packets align there, and the source's own keyframe spacing. Read from a bounded window, so it is fast on long sources. Use it to decide between copying at an anchor and cutting exactly, which re-encodes the material from the preceding anchor up to the cut.")]
+    public Task<CallToolResult> ListCutPointsAsync(string projectPath, string assetId, long atTicks,
+        CancellationToken cancellationToken,
+        [Description("Optional window in project ticks. Omitted, the window comes from the source's own keyframe spacing.")]
+        long? windowTicks = null)
+        => TextAsync(() => operations.ListCutPointsAsync(projectPath, assetId, atTicks, windowTicks, cancellationToken),
+            MediaJson.Default.CutPoints);
 
     [McpServerTool(Name = "roughcut_preflight_export", ReadOnly = true)]
     [Description("Resolve exact export boundaries and return explicit supported/unsupported stream actions without writing output.")]

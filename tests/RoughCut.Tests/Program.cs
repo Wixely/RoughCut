@@ -42,6 +42,19 @@ static async Task Throws<T>(Func<Task> action) where T : Exception
     catch (T) { return; }
     throw new Exception($"Expected {typeof(T).Name}.");
 }
+// A refusal is only useful if it says what went wrong, so these hand the exception back to be read.
+static T Caught<T>(Action action) where T : Exception
+{
+    try { action(); }
+    catch (T expected) { return expected; }
+    throw new Exception($"Expected {typeof(T).Name}.");
+}
+static async Task<T> CaughtAsync<T>(Func<Task> action) where T : Exception
+{
+    try { await action(); }
+    catch (T expected) { return expected; }
+    throw new Exception($"Expected {typeof(T).Name}.");
+}
 static EditProject Fixture() => new()
 {
     ProjectId = "fixture",
@@ -241,6 +254,87 @@ await Check("Caption selection records quality provenance and allows explicit ov
         "Explicit caption override was not persisted.");
     await Throws<RevisionConflictException>(() => operations.SelectCaptionsAsync("caption-selection.json", "video", candidates, 2, "en"));
 });
+await Check("The caller chooses a rendition by identifier or by bitrate policy", () =>
+{
+    SourceFormat Video(string id, int height, double kbps, long bytes) =>
+        new(id, "mp4", "video", height * 16 / 9, height, 25, "avc1", "none", kbps, bytes);
+    var list = new SourceFormatList(1, "https://example.test/v", "Fixture title", 600, YtDlpAcquirer.MaxDownloadBytes,
+        [new("251", "webm", "audio", 0, 0, 0, "none", "opus", 60, 1048576),
+         Video("160", 144, 100, 2097152), Video("136", 720, 800, 10485760),
+         Video("137", 1080, 2500, 41943040), Video("313", 2160, 20000, 943718400)],
+        SourceFormatPolicy.Policies);
+    const long bound = YtDlpAcquirer.MaxDownloadBytes;
+
+    // Policies name a bitrate, and each pairs a video-only rendition with the source's audio.
+    Assert(SourceFormatPolicy.Choose(list, "highest", bound).Expression == "137+251" &&
+        SourceFormatPolicy.Choose(list, "lowest", bound).Expression == "160+251" &&
+        SourceFormatPolicy.Choose(list, "medium", bound).Expression == "136+251" &&
+        SourceFormatPolicy.Choose(list, null, bound).Expression == "136+251",
+        "Bitrate policies did not choose the expected renditions, or the default was not the middle one.");
+
+    // The rendition over the bound is never chosen, and the choice records what it is and why.
+    var highest = SourceFormatPolicy.Choose(list, "highest", bound);
+    Assert(highest.SelectedId == "137" && highest.AudioId == "251" &&
+        highest.EstimatedBytes == 41943040 + 1048576 && highest.BitrateKbps == 2560 &&
+        highest.Reason.Contains("1080p", StringComparison.Ordinal),
+        "The chosen rendition did not record what it is or why.");
+
+    Assert(SourceFormatPolicy.Choose(list, "137+251", bound).Expression == "137+251",
+        "An explicit pair of identifiers was not honoured.");
+    Caught<InvalidDataException>(() => SourceFormatPolicy.Choose(list, "313+251", bound));
+    Caught<ArgumentException>(() => SourceFormatPolicy.Choose(list, "137", bound));
+    Caught<ArgumentException>(() => SourceFormatPolicy.Choose(list, "999", bound));
+    Caught<ArgumentException>(() => SourceFormatPolicy.Choose(list, "137 & rm -rf", bound));
+
+    // Nothing affordable is refused before any download, naming the smallest rendition and the bound.
+    var oversized = list with { Formats = [list.Formats[0], list.Formats[^1]] };
+    var refusal = Caught<InvalidDataException>(() => SourceFormatPolicy.Choose(oversized, "lowest", bound));
+    // 901 MiB: the 900 MiB rendition plus the audio it would have to be paired with.
+    Assert(refusal.Message.Contains("901", StringComparison.Ordinal) &&
+        refusal.Message.Contains("512", StringComparison.Ordinal),
+        "The refusal did not give the sizes involved: " + refusal.Message);
+    return Task.CompletedTask;
+});
+
+await Check("Acquisition lists renditions, requests the chosen one and refuses a partial download", async () =>
+{
+    var workspace = new WorkspaceBoundary(testRoot);
+    var lister = new TestAcquisitionTool();
+    var listed = await new YtDlpAcquirer(workspace, "fake-yt-dlp", lister).ListFormatsAsync("https://example.test/formats");
+    Assert(listed.Formats.Length == 5 && listed.Formats.All(format => format.Id != "sb0") &&
+        listed.Formats.Count(format => format.Kind == "audio") == 1 &&
+        listed.Policies.SequenceEqual(new[] { "highest", "medium", "lowest" }) &&
+        listed.MaxBytes == YtDlpAcquirer.MaxDownloadBytes && listed.DurationSeconds == 600,
+        "Listing did not describe the renditions a caller chooses between.");
+
+    var chosen = new TestAcquisitionTool();
+    var result = await new YtDlpAcquirer(workspace, "fake-yt-dlp", chosen)
+        .AcquireAsync("https://example.test/choose", "acquired-chosen", format: "lowest");
+    var arguments = chosen.DownloadArguments!;
+    Assert(arguments.Contains("--format") && arguments[arguments.IndexOf("--format") + 1] == "160+251" &&
+        result.Format is { Request: "lowest", Expression: "160+251" },
+        "The acquisition did not request the chosen rendition, or did not record the choice.");
+
+    // The two failures a real 4K source produced, now named rather than surfacing as a LINQ message.
+    var partial = new TestAcquisitionTool { LeavePartialFile = true };
+    var aborted = await CaughtAsync<InvalidDataException>(() => new YtDlpAcquirer(workspace, "fake-yt-dlp", partial)
+        .AcquireAsync("https://example.test/partial", "acquired-partial"));
+    Assert(aborted.Message.Contains("did not complete", StringComparison.Ordinal) &&
+        aborted.Message.Contains("source.f401.mp4.part", StringComparison.Ordinal),
+        "A partial download was not reported as one: " + aborted.Message);
+
+    var doubled = new TestAcquisitionTool { WriteSecondMedia = true };
+    var twice = await CaughtAsync<InvalidDataException>(() => new YtDlpAcquirer(workspace, "fake-yt-dlp", doubled)
+        .AcquireAsync("https://example.test/double", "acquired-double"));
+    Assert(twice.Message.Contains("more than one media file", StringComparison.Ordinal) &&
+        twice.Message.Contains("source.webm", StringComparison.Ordinal),
+        "Two media files were not reported by name: " + twice.Message);
+    Assert(!Directory.Exists(Path.Combine(testRoot, "acquired-partial")) &&
+        !Directory.Exists(Path.Combine(testRoot, "acquired-double")) &&
+        !Directory.EnumerateDirectories(testRoot, ".roughcut-acquire-*").Any(),
+        "A refused acquisition left output behind.");
+});
+
 await Check("yt-dlp acquisition is bounded, staged and strips URL secrets from provenance", async () =>
 {
     var fake = new TestAcquisitionTool();
@@ -835,10 +929,27 @@ sealed class TestAcquisitionTool(string? mediaFixture = null) : IAcquisitionTool
 {
     public IReadOnlyList<string>? DownloadArguments { get; private set; }
     public bool OmitCaptions { get; init; }
+    /// Reproduces a download the size bound aborted part way: a fragment beside the media.
+    public bool LeavePartialFile { get; init; }
+    /// Reproduces a download that wrote two media files, which once surfaced as a bare LINQ message.
+    public bool WriteSecondMedia { get; init; }
+
+    // One audio rendition, four video ones with the largest deliberately over the download bound, and a
+    // storyboard entry that is neither.
+    public const string FormatsJson = """
+        {"title":"Fixture title","duration":600,"formats":[
+          {"format_id":"251","ext":"webm","vcodec":"none","acodec":"opus","tbr":60,"filesize":1048576},
+          {"format_id":"160","ext":"mp4","vcodec":"avc1","acodec":"none","height":144,"tbr":100,"filesize":2097152},
+          {"format_id":"136","ext":"mp4","vcodec":"avc1","acodec":"none","height":720,"tbr":800,"filesize":10485760},
+          {"format_id":"137","ext":"mp4","vcodec":"avc1","acodec":"none","height":1080,"tbr":2500,"filesize":41943040},
+          {"format_id":"313","ext":"webm","vcodec":"vp9","acodec":"none","height":2160,"tbr":20000,"filesize":943718400},
+          {"format_id":"sb0","ext":"mhtml","vcodec":"none","acodec":"none","height":90}]}
+        """;
 
     public async Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
         if (arguments.Contains("--version")) return new("2026.09.01\n"u8.ToArray(), "");
+        if (arguments.Contains("--dump-single-json")) return new(System.Text.Encoding.UTF8.GetBytes(FormatsJson), "");
         DownloadArguments = arguments;
         var index = arguments.IndexOf("--paths");
         var staging = arguments[index + 1];
@@ -849,6 +960,10 @@ sealed class TestAcquisitionTool(string? mediaFixture = null) : IAcquisitionTool
         if (!OmitCaptions)
             await File.WriteAllTextAsync(Path.Combine(staging, "source.en.srt"),
                 "1\n00:00:00,000 --> 00:00:01,000\nCaption\n", cancellationToken);
+        if (LeavePartialFile)
+            await File.WriteAllBytesAsync(Path.Combine(staging, "source.f401.mp4.part"), "aborted"u8.ToArray(), cancellationToken);
+        if (WriteSecondMedia)
+            await File.WriteAllBytesAsync(Path.Combine(staging, "source.webm"), "second"u8.ToArray(), cancellationToken);
         return new([], "");
     }
 }
