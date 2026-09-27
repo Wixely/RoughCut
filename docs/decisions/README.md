@@ -23,5 +23,8 @@
 | [0019](0019-approximated-preview-playback.md) | 2026-09-21 | Accepted for desktop review | Approximate the timeline over one cached source copy; the validated render becomes an explicit action, superseding the playback mechanism in 0015 |
 | [0020](0020-delivery-encode-export.md) | 2026-09-22 | Accepted for the first delivery slice | A re-encoding H.264/AAC MP4 delivery path beside the untouched strict copy export, claiming a faithful edit rather than an untouched copy |
 | [0021](0021-reversible-clip-removal.md) | 2026-09-24 | Accepted for the desktop timeline-editing slice | `insert-clip` as the exact inverse of `remove`, so the review window can cut material out and still undo it; extends 0017 |
+| [0022](0022-stream-copy-mux-export.md) | 2026-09-27 | Accepted for the fast-export slice | Stream-copy export whose starts snap to source keyframes and whose plan states the offset; bounded anchor reading so the caller chooses copy or re-encode |
+| [0023](0023-measurement-inside-roughcut.md) | 2026-09-27 | Accepted as a boundary for every future analysis feature | Whatever a caller must measure to decide an edit is a RoughCut tool returning numbers, not a verdict |
+| [0024](0024-overlapping-transcription-windows.md) | 2026-09-27 | Accepted for local transcription | Each chunk hears three seconds of what precedes it and discards what it reports there, so a boundary stops inventing speech; amends 0006 and 0007 |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

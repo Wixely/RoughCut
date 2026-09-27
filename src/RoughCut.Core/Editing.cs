@@ -14,6 +14,29 @@ public static class TimeMath
         return checked((long)result);
     }
 
+    /// Rounds to the nearest tick. Only for a quantity that was already an estimate — a speech boundary a
+    /// model guessed, say. An edit boundary decides which frames survive and must use ExactTicks.
+    public static long NearestTicks(MediaTime time, TimeBase target)
+    {
+        if (!time.TimeBase.IsValid || !target.IsValid) throw new ArgumentException("Invalid time base.");
+        var numerator = (BigInteger)time.Ticks * time.TimeBase.Numerator * target.Denominator;
+        var denominator = (BigInteger)time.TimeBase.Denominator * target.Numerator;
+        var result = BigInteger.DivRem(numerator, denominator, out var remainder);
+        if (BigInteger.Abs(remainder) * 2 >= BigInteger.Abs(denominator)) result += time.Ticks < 0 ? -1 : 1;
+        return checked((long)result);
+    }
+
+    /// Rounds towards zero. For a length being measured rather than a boundary being cut: a source's own
+    /// duration is rarely a whole number of milliseconds, and rounding down never claims material that is
+    /// not there.
+    public static long FloorTicks(MediaTime time, TimeBase target)
+    {
+        if (!time.TimeBase.IsValid || !target.IsValid) throw new ArgumentException("Invalid time base.");
+        var numerator = (BigInteger)time.Ticks * time.TimeBase.Numerator * target.Denominator;
+        var denominator = (BigInteger)time.TimeBase.Denominator * target.Numerator;
+        return checked((long)(numerator / denominator));
+    }
+
     public static MediaTime Add(MediaTime left, MediaTime right)
     {
         if (!left.TimeBase.IsValid || !right.TimeBase.IsValid) throw new ArgumentException("Invalid time base.");

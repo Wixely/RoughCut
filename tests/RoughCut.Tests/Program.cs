@@ -724,10 +724,19 @@ if (args.Contains("--media", StringComparer.Ordinal))
         var transcriber = new TestSpeechTranscriber();
         var report = await new LocalSpeechProcessor(ffmpeg).TranscribeAsync(speechProject,
             Path.Combine(testRoot, "speech-project.json"), "speech-source", transcriber, chunkSeconds: 5);
-        Assert(report.Chunks == 3 && report.Provider == "test-local" && report.Model == "timed-fixture" &&
-            report.Segments.Select(segment => (segment.Start, segment.End)).SequenceEqual(new[] { (0L, 5000L), (5000L, 10000L), (10000L, 12000L) }) &&
+        // The window never exceeds what was asked for: the context comes out of it, not on top of it.
+        Assert(report.Chunks == 4 && report.Provider == "test-local" && report.Model == "timed-fixture" &&
             transcriber.MaximumBytes <= 5 * LocalSpeechProcessor.SampleRate * sizeof(short),
             "Local STT chunking or timed provenance is incorrect.");
+        // Each window owns only the span between its context margins, and everything reported outside that
+        // span is discarded: it belongs to a neighbour, which heard it away from its own edges.
+        Assert(report.DiscardedOverlapSegments == 10 && report.Segments.Length == 13,
+            $"Overlapping windows kept the wrong material: {report.Segments.Length} segments, {report.DiscardedOverlapSegments} discarded.");
+        Assert(report.Segments.Count(segment => segment.Text == "phantom") == 2,
+            "The wrong number of window-edge fragments survived; only those at the very start and end of the source can.");
+        var starts = report.Segments.Select(segment => segment.Start).ToArray();
+        Assert(starts.SequenceEqual(starts.Order()) && starts.Distinct().Count() == starts.Length,
+            "Overlapping windows produced duplicated or out-of-order speech.");
         var speechProjectPath = Path.Combine(testRoot, "speech-project.json");
         await store.SaveAsync(speechProjectPath, speechProject with
         {
@@ -743,7 +752,7 @@ if (args.Contains("--media", StringComparer.Ordinal))
         }, 0);
         var saved = await new RoughCutOperations(new WorkspaceBoundary(testRoot), ffmpeg)
             .TranscribeLocalAsync("speech-project.json", "speech-source", 1, transcriber, chunkSeconds: 5);
-        Assert(saved.Revision == 2 && saved.Speech.Length == 3 && saved.Transcription is { Provider: "test-local", ChunkSeconds: 5 } &&
+        Assert(saved.Revision == 2 && saved.Speech.Length == 13 && saved.Transcription is { Provider: "test-local", ChunkSeconds: 5, OverlapSeconds: 1, DiscardedOverlapSegments: 10 } &&
             saved.Diarization is null &&
             saved.Captions is { SourceKind: "local-stt", Selection: "recommended" } &&
             File.Exists(Path.Combine(testRoot, saved.Captions.SourcePath.Replace('/', Path.DirectorySeparatorChar))),
@@ -919,8 +928,13 @@ sealed class TestSpeechTranscriber : ILocalSpeechTranscriber
     {
         MaximumBytes = Math.Max(MaximumBytes, pcm.Length);
         var duration = pcm.Length * 1000L / (LocalSpeechProcessor.SampleRate * sizeof(short));
-        return Task.FromResult(new LocalSpeechResult("test-local", "timed-fixture", "en",
-            [new(0, duration, "synthetic speech")]));
+        // Engines report a fragment at each edge of whatever window they are handed, whether or not anything
+        // was said there. The overlap exists to stop those becoming speech in the transcript.
+        var segments = new List<LocalSpeechSegment> { new(0, Math.Min(250, duration), "phantom") };
+        for (long at = 500; at + 1000 <= duration; at += 1000)
+            segments.Add(new(at, at + 1000, "synthetic speech"));
+        if (duration >= 250) segments.Add(new(duration - 250, duration, "phantom"));
+        return Task.FromResult(new LocalSpeechResult("test-local", "timed-fixture", "en", segments.ToArray()));
     }
 }
 

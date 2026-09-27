@@ -295,12 +295,13 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
 
     public async Task<EditProject> TranscribeLocalAsync(string projectPath, string assetId, long expectedRevision,
         ILocalSpeechTranscriber transcriber, int chunkSeconds = LocalSpeechProcessor.DefaultChunkSeconds,
-        CancellationToken token = default)
+        CancellationToken token = default, int? overlapSeconds = null)
     {
         var path = workspace.Resolve(projectPath);
         var project = await _store.LoadAsync(path, token);
         if (project.Revision != expectedRevision) throw new RevisionConflictException();
-        var report = await new LocalSpeechProcessor(ffmpeg).TranscribeAsync(project, path, assetId, transcriber, chunkSeconds, token);
+        var report = await new LocalSpeechProcessor(ffmpeg).TranscribeAsync(project, path, assetId, transcriber,
+            chunkSeconds, token, overlapSeconds);
         if (report.Segments.Length == 0) throw new InvalidDataException("Local transcription returned no timed speech.");
         var output = report.Segments.Select(segment => new OutputCaption(segment.Id, assetId,
             new(segment.Start, project.TimeBase), new(segment.End, project.TimeBase), segment.Text)).ToArray();
@@ -328,13 +329,17 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         var cues = Captions.ParseSrt(srt);
         var asset = project.Assets.Single(item => item.Id == assetId);
         var covered = cues.Sum(cue => cue.End - cue.Start);
-        var durationMs = TimeMath.ExactTicks(new(asset.Duration, project.TimeBase), new(1, 1000));
+        // A coverage percentage measures a length; it does not decide a cut, so the duration is rounded
+        // down rather than demanded exactly. Insisting here refused to transcribe any source whose time
+        // base could not express its own length in whole milliseconds.
+        var durationMs = TimeMath.FloorTicks(new(asset.Duration, project.TimeBase), new(1, 1000));
         var coverage = durationMs == 0 ? 0 : checked((int)Math.Min(10_000, covered * 10_000 / durationMs));
         var edited = project with
         {
             Revision = checked(expectedRevision + 1),
             Speech = [.. project.Speech.Where(segment => segment.AssetId != assetId), .. report.Segments],
-            Transcription = new(assetId, asset.Sha256, report.Provider, report.Model, report.Language, chunkSeconds),
+            Transcription = new(assetId, asset.Sha256, report.Provider, report.Model, report.Language, chunkSeconds,
+                report.OverlapSeconds, report.DiscardedOverlapSegments),
             Diarization = project.Diarization?.AssetId == assetId ? null : project.Diarization,
             Captions = new(assetId, relative, hash, new(1, 1000), cues, "local-stt", report.Language,
                 "recommended", $"{report.Provider}:{report.Model}", coverage)
@@ -418,12 +423,32 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         return await new ExportPlanner(ffmpeg, ffprobe).PreflightAsync(await _store.LoadAsync(path, token), path, token);
     }
 
+    /// Where every requested boundary would land if the retained material were copied rather than
+    /// re-encoded, and how far each moved to get there.
+    public async Task<MuxPlan> PreflightMuxAsync(string projectPath, string container = "mkv",
+        CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        return await new MuxExporter(ffmpeg, ffprobe).PlanAsync(await _store.LoadAsync(path, token), path, container, token);
+    }
+
     /// Delivery preflight answers a different question from the strict one: not whether the retained
     /// material can be copied untouched, but whether this timeline can be re-encoded into one portable file.
     public async Task<DeliveryPlan> PreflightDeliveryAsync(string projectPath, CancellationToken token = default)
     {
         var path = workspace.Resolve(projectPath);
         return DeliveryExporter.Plan(await _store.LoadAsync(path, token), path);
+    }
+
+    /// Measures the shape of a source's sound over a range, so a caller can find its sections without
+    /// reaching for its own tools.
+    public async Task<AudioProfile> ProfileAudioAsync(string projectPath, string assetId, long fromTicks,
+        long toTicks, long windowTicks, int bandSplitHz = AudioProfiler.DefaultBandSplitHz,
+        CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        return await new AudioProfiler(ffmpeg).ProfileAsync(await _store.LoadAsync(path, token), path,
+            assetId, fromTicks, toTicks, windowTicks, bandSplitHz, token);
     }
 
     /// Where a stream copy may begin or end near a requested time in one source, read from a bounded

@@ -47,7 +47,7 @@ public sealed record DiarizationProvenance(string AssetId, string SourceSha256, 
 public sealed record DiarizationPlanResult(EditProject Project, int InferredSegments,
     int UnknownSegments, int PreservedCorrections);
 public sealed record TranscriptionProvenance(string AssetId, string SourceSha256, string Provider,
-    string Model, string Language, int ChunkSeconds);
+    string Model, string Language, int ChunkSeconds, int OverlapSeconds = 0, int DiscardedOverlapSegments = 0);
 public sealed record AnalysisEvidence(string Id, string AssetId, long Start, long End, string Kind,
     string Summary, string[] SpeechSegmentIds, long[] FrameTicks);
 public sealed record AnalysisObservation(string Id, string AssetId, long Start, long End, string Label,

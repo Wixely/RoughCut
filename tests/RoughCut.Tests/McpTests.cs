@@ -240,6 +240,12 @@ internal static class McpTests
 
         await check("MCP enforces workspace paths and project revisions", async () =>
         {
+            // Point the host at a model that is not there, so "no model" is what is tested wherever this
+            // runs: the machine building this may well have fetched one into RoughCut's own store.
+            var previousModel = Environment.GetEnvironmentVariable("ROUGHCUT_STT_MODEL");
+            Environment.SetEnvironmentVariable("ROUGHCUT_STT_MODEL", Path.Combine(root, "absent-model.bin"));
+            try
+            {
             await using var client = await CreateClientAsync(command, arguments);
             var escaped = await client.CallToolAsync("roughcut_inspect_video", new Dictionary<string, object?> { ["mediaPath"] = "../outside.mkv" });
             Assert(escaped.IsError == true, "Workspace escape was accepted.");
@@ -257,8 +263,11 @@ internal static class McpTests
                 ["assetId"] = "source-1",
                 ["expectedRevision"] = 4L
             });
-            Assert(unconfiguredSpeech.IsError == true && unconfiguredSpeech.Content.OfType<TextContentBlock>().Single().Text.Contains("ROUGHCUT_STT_MODEL", StringComparison.Ordinal),
-                "Unconfigured local STT did not return an actionable error.");
+            Assert(unconfiguredSpeech.IsError == true &&
+                unconfiguredSpeech.Content.OfType<TextContentBlock>().Single().Text.Contains("roughcut_fetch_speech_model", StringComparison.Ordinal),
+                "Local STT without a model did not say how to get one.");
+            }
+            finally { Environment.SetEnvironmentVariable("ROUGHCUT_STT_MODEL", previousModel); }
         });
 
         await check("MCP caption assessment recommends and records a source", async () =>

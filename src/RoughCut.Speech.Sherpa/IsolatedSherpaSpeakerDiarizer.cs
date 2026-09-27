@@ -49,7 +49,7 @@ public sealed class IsolatedSherpaSpeakerDiarizer : ISpeakerDiarizer
                 _segmentationModel, _embeddingModel, _speakerCount.ToString(CultureInfo.InvariantCulture),
                 _threshold.ToString("R", CultureInfo.InvariantCulture)];
             var result = await ToolProcess.RunAsync(_executable, arguments, ProjectStore.MaxDocumentBytes,
-                TimeSpan.FromMinutes(11), cancellationToken);
+                TimeSpan.FromMinutes(11), cancellationToken: cancellationToken);
             return JsonSerializer.Deserialize(result.Output, ProjectJson.Default.DiarizationSubmission)
                 ?? throw new InvalidDataException("Diarization worker returned no result.");
         }

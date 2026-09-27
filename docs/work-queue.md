@@ -1,5 +1,7 @@
 # Implementation work queue
 
+2026-09-27 a real job, end to end over MCP: a 13-minute 1440×1080 music video was acquired from a URL and cut down twice — once to its music, once to remove everything anyone speaks or sings — with the first output copied rather than re-encoded. Five things had to be built because the run failed without them: caller-chosen renditions with a bitrate policy, audio band profiling to find the sections at all, bounded cut-point reading so a copy can be aimed, a single-pass stream-copy export, and overlapping transcription windows after the chunk boundary was found to be inventing a fifth of the speech it claimed. See [decision 0022](decisions/0022-stream-copy-mux-export.md), [0023](decisions/0023-measurement-inside-roughcut.md), [0024](decisions/0024-overlapping-transcription-windows.md) and the [evidence](evidence/2026-09-27-mux-and-measurement.md). Owner: Implementation agent; the remaining error is the opposite one — `base.en` misses sung words, so vocal material survives a no-vocals edit, which needs a larger model or a second signal rather than more context.
+
 2026-09-24 published outputs: the suite now runs against published executables, not only the build tree. All three hosts publish and pass, and a self-contained desktop build — 102 MB, no .NET required — passes the same suite and decodes video and audio from its own layout with zero drift and zero underruns. `scripts/verify.ps1 -Published` repeats it. See the [published-outputs evidence](evidence/2026-09-24-published-outputs.md). `linux-x64` is now declared and locked too, and the CLI and desktop publish for it with their Linux natives — buildable, never run. Owner: Implementation agent; Linux execution, macOS and the NativeAOT path remain, the last blocked by the absent MSVC linker.
 
 2026-09-24 release hygiene: dependencies are pinned exactly and locked — every project has a committed `packages.lock.json`, so `dotnet restore --locked-mode` resolves what is committed or fails rather than drifting. `.\scripts\dependency-report.ps1` inventories all 83 resolved packages with their licences and exits nonzero on anything that is not permissive; today they are 69 MIT, 12 Apache-2.0 and 2 Zlib. [Dependencies, licences and assets](dependencies.md) records what ships, what is merely invoked and what models the user supplies; [what RoughCut does not do](unsupported.md) collects the enforced limits and the untested ground in one page. Owner: Implementation agent; RC-07 still needs published Windows/Linux execution and the AOT experiments.
@@ -24,7 +26,7 @@
 
 2026-09-20 branding: approved aperture-sawblade logo integrated as transparent window/README PNG and Windows executable ICO. Owner: Implementation agent; next verify live window/taskbar and Explorer appearance.
 
-- Updated: 2026-09-24
+- Updated: 2026-09-27
 - Review: Each completed slice or changed dependency decision
 - Status: RC-06 interactive window run opened and played an acquired project; representative diarization quality, audio-device acceptance and Linux remain
 

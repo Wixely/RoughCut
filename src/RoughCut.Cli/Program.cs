@@ -45,9 +45,12 @@ try
                   formats <url>
                   acquire <url> <new-output-directory> [--format <id|highest|medium|lowest>] [deno-executable]
                   create-url <url> <new-output-directory> [--format <id|highest|medium|lowest>] [deno-executable]
+                  audio-profile <project.json> <asset-id> <from-seconds> <to-seconds> <window-seconds> [band-hz]
                   cut-points <project.json> <asset-id> <seconds> [window-seconds]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
+                  preflight-mux <project.json> [mkv|mp4]
+                  mux <project.json> <new-output-directory> [mkv|mp4]
                   preflight-delivery <project.json>
                   deliver <project.json> <new-output-directory>
 
@@ -247,6 +250,20 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
+        case ["audio-profile", var path, var assetId, var fromText, var toText, var windowText, .. var bandOptions]
+            when bandOptions.Length <= 1:
+            {
+                var project = await store.LoadAsync(path, token);
+                long Ticks(string text) => (long)Math.Round(
+                    decimal.Parse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture) *
+                    project.TimeBase.Denominator / project.TimeBase.Numerator, MidpointRounding.AwayFromZero);
+                var profile = await new AudioProfiler(ffmpeg).ProfileAsync(project, path, assetId,
+                    Ticks(fromText), Ticks(toText), Ticks(windowText),
+                    bandOptions.Length == 1 ? int.Parse(bandOptions[0], CultureInfo.InvariantCulture) : AudioProfiler.DefaultBandSplitHz,
+                    token);
+                Console.WriteLine(JsonSerializer.Serialize(profile, MediaJson.Default.AudioProfile));
+                break;
+            }
         case ["cut-points", var path, var assetId, var secondsText, .. var cutOptions] when cutOptions.Length <= 1:
             {
                 var project = await store.LoadAsync(path, token);
@@ -268,6 +285,20 @@ try
             {
                 var report = await new ExportEngine(ffmpeg, ffprobe).ExportAsync(path, destination, options.Length == 1, token);
                 Console.WriteLine(JsonSerializer.Serialize(report, ProjectJson.Default.ExportReport));
+                break;
+            }
+        case ["preflight-mux", var path, .. var muxPlanOptions] when muxPlanOptions.Length <= 1:
+            {
+                var plan = await new MuxExporter(ffmpeg, ffprobe).PlanAsync(await store.LoadAsync(path, token), path,
+                    muxPlanOptions.FirstOrDefault() ?? "mkv", token);
+                Console.WriteLine(JsonSerializer.Serialize(plan, MediaJson.Default.MuxPlan));
+                return plan.Supported ? 0 : 2;
+            }
+        case ["mux", var path, var destination, .. var muxOptions] when muxOptions.Length <= 1:
+            {
+                var report = await new MuxExporter(ffmpeg, ffprobe).ExportAsync(path, destination,
+                    muxOptions.FirstOrDefault() ?? "mkv", token);
+                Console.WriteLine(JsonSerializer.Serialize(report, MediaJson.Default.MuxReport));
                 break;
             }
         case ["preflight-delivery", var path]:
@@ -373,6 +404,11 @@ catch (ExportRejectedException exception)
 catch (DeliveryRejectedException exception)
 {
     Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, ProjectJson.Default.DeliveryPlan));
+    return 2;
+}
+catch (MuxRejectedException exception)
+{
+    Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, MediaJson.Default.MuxPlan));
     return 2;
 }
 catch (OperationCanceledException)

@@ -93,6 +93,28 @@ What delivery checks before publishing: the delivered file really is H.264 and A
 
 A delivered file is a re-encode. It is not evidence about its source, and where that evidence is the point, use the strict bundle.
 
+## Mux
+
+Mux ([decision 0022](decisions/0022-stream-copy-mux-export.md)) copies the retained material into a new container without decoding it. It is neither the strict export nor delivery: it makes no validated-matrix claim and touches no pixel, so it finishes in seconds and the packets it keeps are the source's own.
+
+The cost is where the cuts land. A video copy can only begin at a keyframe, so each segment's **start** snaps to one; the **end** stays exactly where it was asked for, because a copy can stop anywhere. The plan names `requestedIn`/`requestedOut` beside the anchors used and the signed offset between them, so the error is stated rather than implied.
+
+```powershell
+dotnet run --project src/RoughCut.Cli -- cut-points artifacts/demo/project.json source-1 253
+dotnet run --project src/RoughCut.Cli -- preflight-mux artifacts/demo/project.json mkv
+dotnet run --project src/RoughCut.Cli -- mux artifacts/demo/project.json artifacts/demo/copied mkv
+```
+
+`cut-points` reports the keyframe anchors behind and ahead of a time, how far each sits from it, whether an audio packet starts within half a packet of it, and the source's own median keyframe interval — read from a bounded window of packets without decoding, in about a second on a file whose full index takes over two minutes. `audioAligned` is `null`, not `false`, where the audio was not sampled at that point. Use it to see the choice before making it: snap to an anchor and copy, or accept that this boundary needs delivery's re-encode.
+
+`preflight-mux` resolves every boundary onto an anchor and prints the plan. Unlike the delivery preflight it does read the media, because anchors are a property of the file, but only a bounded window per boundary.
+
+Bounds are 200 segments and 8 GiB. One FFmpeg run does the whole job from a single `ffconcat` list of `inpoint`/`outpoint` pairs: cutting each segment separately and concatenating them inflated the result, because each part was rounded outward and the errors accumulated.
+
+Two properties are checked rather than assumed. Every published output must begin on a keyframe — a copy that starts elsewhere writes a file whose picture begins late, with no error from the muxer. And where two copied segments meet, audio packets are whole and do not align with the picture cut, so the muxer moves some of them forward; those adjustments are counted in `joinAdjustments`, while any other FFmpeg warning still fails the export. The packets themselves are untouched; only where they sit changes.
+
+A mux output is fast and bit-exact for what it keeps. It is not evidence about frame-exact editorial intent: where the boundary matters more than the pixels, use delivery.
+
 ## Captions and output validation
 
 Import accepts plain SRT cue numbers, `HH:MM:SS,mmm` timestamps and multiline nonempty text, up to 1 MiB and 10,000 cues. Original bytes stay untouched; project JSON records the relative path/hash and cues in their original millisecond time base. Imported cues must fall within their source duration. Malformed input is rejected. Caption text is data, never a command or inference instruction.
