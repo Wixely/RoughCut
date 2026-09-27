@@ -125,6 +125,57 @@ internal static class DesktopTests
                 "Redoing the timeline edits did not reproduce the split, trim and order.");
         });
 
+        await check("Desktop clip removal persists with undo and redo", async () =>
+        {
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
+            var third = info.DurationTicks / 3;
+            var projectPath = Path.Combine(root, "desktop-removal-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-removal",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                // Every video clip shares one output canvas, so the crop is the same on all three.
+                Timeline = [new("first", "source", 0, third, new(8, 4, info.Width - 16, info.Height - 8)),
+                    new("advert", "source", third, third * 2, new(8, 4, info.Width - 16, info.Height - 8)),
+                    new("last", "source", third * 2, info.DurationTicks, new(8, 4, info.Width - 16, info.Height - 8))]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            await session.SelectClipAsync("advert");
+            var removed = session.Project.Timeline.Single(clip => clip.Id == "advert");
+
+            await session.RemoveSelectedClipAsync();
+            Assert(session.Project.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "last"]),
+                "Removing the selected clip did not cut it out of the timeline.");
+
+            await session.UndoAsync();
+            Assert(session.Project.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "advert", "last"]) &&
+                session.Project.Timeline[1] == removed,
+                "Undo did not put the removed clip back exactly where it was.");
+
+            await session.RedoAsync();
+            var saved = await new ProjectStore().LoadAsync(projectPath);
+            Assert(saved.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "last"]) && saved.Revision == 4,
+                "Redo did not remove the clip again in one revision each.");
+
+            // The last clip cannot be removed: nothing in the window could add a clip back to an empty timeline.
+            await session.SelectClipAsync("first");
+            await session.RemoveSelectedClipAsync();
+            await session.SelectClipAsync("last");
+            await Throws<InvalidOperationException>(() => session.RemoveSelectedClipAsync());
+            Assert(session.Project.Timeline.Length == 1, "The last clip was removed.");
+
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.RemoveClass == "hidden", "Remove was offered for the only clip on the timeline.");
+        });
+
         await check("Supplied review proxy survives edits and reports that it is behind", async () =>
         {
             var projectPath = Path.Combine(root, "desktop-timeline-project.json");
@@ -163,6 +214,51 @@ internal static class DesktopTests
             Throws<FileNotFoundException>(() => session.UsePlaybackPreview(Path.Combine(root, "absent-review.webm")));
             Assert(ReferenceEquals(session.Playback, supplied),
                 "A rejected review proxy replaced the accepted one.");
+        });
+
+        await check("Review window exports the timeline to a deliverable MP4 beside the project", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var revision = session.Project.Revision;
+            var report = await session.DeliverAsync();
+            var expected = Path.Combine(root, "desktop-timeline-project-export", "video.mp4");
+            Assert(session.DeliveredPath == expected && File.Exists(expected) && report.Plan.Revision == revision,
+                "The window did not publish an MP4 beside the project for the current revision.");
+            Assert(report.Plan.Clips.Length == session.Project.Timeline.Length &&
+                session.DeliveryStatus.Contains("Exported", StringComparison.Ordinal) &&
+                session.DeliveryStatus.Contains("MiB", StringComparison.Ordinal),
+                "The export did not report what it published.");
+            Assert(session.Project.Revision == revision && (await new ProjectStore().LoadAsync(projectPath)).Revision == revision,
+                "Exporting changed the project.");
+
+            // The window shows the outcome and offers the action; a second export never overwrites the first.
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.ExportStatus == session.DeliveryStatus && model.ExportLabel == "Export MP4" &&
+                document.DebugDump(1280, 800).Contains("Export MP4", StringComparison.Ordinal),
+                "The review window did not offer the export action or show its outcome.");
+
+            await session.DeliverAsync();
+            Assert(session.DeliveredPath == Path.Combine(root, "desktop-timeline-project-export-2", "video.mp4") &&
+                File.Exists(expected), "A second export overwrote or reused the first bundle.");
+
+            await Throws<OperationCanceledException>(() => session.DeliverAsync(new(true)));
+            Assert(!Directory.EnumerateDirectories(root, ".roughcut-delivery-*").Any() &&
+                session.DeliveryStatus.Contains("canceled", StringComparison.OrdinalIgnoreCase),
+                "A cancelled export left staged artifacts or did not say it published nothing.");
+
+            // An unrenderable timeline is refused with its reason before any encode runs.
+            var imageProject = Path.Combine(root, "desktop-image-project.json");
+            var timeline = await new ProjectStore().LoadAsync(Path.Combine(root, "image-project.json"));
+            await new ProjectStore().SaveAsync(imageProject, timeline with { ProjectId = "desktop-image", Revision = 1 }, 0);
+            var images = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(imageProject);
+            await Throws<InvalidOperationException>(() => images.DeliverAsync());
+            Assert(images.DeliveryStatus.Contains("video clips only", StringComparison.Ordinal),
+                "A timeline delivery cannot render was refused without saying why.");
         });
 
         await check("Recent projects are ordered, bounded, deduplicated and damage tolerant", async () =>
@@ -281,6 +377,77 @@ internal static class DesktopTests
             // GetOpenFileName moves the process working directory; every later relative path depends on this.
             Assert(Environment.CurrentDirectory == workingDirectory,
                 "The file dialog left the process working directory changed.");
+        });
+
+        await check("The transport reads the timeline, not the source copy behind it", async () =>
+        {
+            // Pure mapping first: a timeline that keeps one second out of each half of a four-second source.
+            var project = new EditProject
+            {
+                ProjectId = "transport",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "export source.mkv", new string('a', 64), 4000, 160, 96, "video/x-matroska")],
+                Timeline = [new("second", "source", 1000, 2000), new("fourth", "source", 3000, 4000)]
+            };
+            var map = RoughCut.Core.ProjectValidator.MapTimeline(project);
+            var duration = RoughCut.Desktop.TimelineTransport.Duration(map, project.TimeBase);
+            Assert(duration == 2, "The transport reported the source duration instead of the timeline's.");
+            // Source second 3.5 is timeline second 1.5: the second clip, half a second in.
+            var position = RoughCut.Desktop.TimelinePlayback.OutputSeconds(map, project.TimeBase, 1, 3.5);
+            Assert(Math.Abs(position - 1.5) < 1e-9 &&
+                Math.Abs(RoughCut.Desktop.TimelineTransport.Fraction(position, duration) - 0.75) < 1e-9,
+                "The transport did not place the playing source position on the timeline.");
+            Assert(RoughCut.Desktop.TimelineTransport.Format(position) == "0:01.500" &&
+                RoughCut.Desktop.TimelineTransport.Format(3725.5) == "1:02:05.500" &&
+                RoughCut.Desktop.TimelineTransport.Format(-1) == "0:00.000",
+                "The transport formatted timeline time incorrectly.");
+
+            // Pressing the track seeks in timeline seconds and clamps to its ends.
+            Assert(RoughCut.Desktop.TimelineTransport.Seek(120, 20, 200, duration) == 1 &&
+                RoughCut.Desktop.TimelineTransport.Seek(5, 20, 200, duration) == 0 &&
+                RoughCut.Desktop.TimelineTransport.Seek(900, 20, 200, duration) == 2 &&
+                RoughCut.Desktop.TimelineTransport.Seek(120, 20, 0, duration) == 0,
+                "Scrubbing the transport did not map the press onto the timeline.");
+
+            // Then the window, over real media: the transport replaces the player's source-relative bar.
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
+            var quarter = info.DurationTicks / 4;
+            var projectPath = Path.Combine(root, "desktop-transport-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-transport",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                Timeline = [new("second", "source", quarter, quarter * 2), new("fourth", "source", quarter * 3, quarter * 4)]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session, new RoughCut.Desktop.DesktopPlaybackController());
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.TransportClass == "" && model.TransportDuration == "0:02.000" &&
+                model.TransportPosition == "0:00.000" && model.TransportLabel == "Play",
+                $"The transport did not show the timeline: {model.TransportPosition} / {model.TransportDuration}");
+            var dump = document.DebugDump(1280, 800);
+            Assert(dump.Contains("transport-track", StringComparison.Ordinal) &&
+                !dump.Contains("cupri-video-bar", StringComparison.Ordinal),
+                "The window kept the player's own source-relative control bar.");
+
+            // The transport adds a row inside the preview card, which pushed the cards below it off the
+            // window until the picture's floor came down. Measure it rather than trusting the stylesheet.
+            using var tree = System.Text.Json.JsonDocument.Parse(dump);
+            var transport = FindBox(tree.RootElement.GetProperty("tree"), "transport-track");
+            var evidence = FindBox(tree.RootElement.GetProperty("tree"), "evidence-card");
+            var preview = FindBox(tree.RootElement.GetProperty("tree"), "preview-card");
+            Assert(transport[2] > 200 && transport[0] >= preview[0] - 0.5f &&
+                transport[0] + transport[2] <= preview[0] + preview[2] + 0.5f,
+                $"The scrub track does not sit inside the preview card: x={transport[0]:0.#} w={transport[2]:0.#}");
+            Assert(evidence[1] + evidence[3] <= 800.5f,
+                $"The stage column overflows the window: the evidence card ends at {evidence[1] + evidence[3]:0.#} of 800.");
         });
 
         await check("Review panel controls stay inside their panel", async () =>
@@ -429,6 +596,142 @@ internal static class DesktopTests
                     500, 500, 160, 96) == new Crop(20, 10, 140, 86),
                 "South-east resizing did not clamp to the frame.");
             return Task.CompletedTask;
+        });
+
+        await check("A cropped clip plays cropped, without stretching the picture", async () =>
+        {
+            // One scale drives both boxes, so the visible box takes the crop's shape and the picture
+            // inside it keeps the source's. Preview 800x400, source 160x96, crop 80x48 at (8,4).
+            var crop = new Crop(8, 4, 80, 48);
+            var paused = RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, crop, playing: false);
+            Assert(paused.ContainerStyle == "left:66.67px;top:0px;width:666.67px;height:400px" &&
+                paused.VideoStyle == "left:0;top:0;width:100%;height:100%" && paused.Fit == "contain",
+                $"A paused cropped clip did not letterbox its exact frame: {paused.ContainerStyle} / {paused.VideoStyle}");
+            var playing = RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, crop, playing: true);
+            Assert(playing.ContainerStyle == paused.ContainerStyle &&
+                playing.VideoStyle == "left:-66.67px;top:-33.33px;width:1333.33px;height:800px" &&
+                playing.Fit == "fill",
+                $"A playing cropped clip did not enlarge and offset the source: {playing.VideoStyle}");
+            // The enlarged picture keeps the source aspect ratio, which is what stops it stretching.
+            Assert(Math.Abs(1333.33 / 800 - 160 / 96d) < 0.01, "The enlarged picture would distort the source.");
+
+            const string whole = "left:0;top:0;width:100%;height:100%";
+            Assert(RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, null, true).ContainerStyle == whole &&
+                RoughCut.Desktop.PreviewCropGeometry.ForCrop(0, 0, 160, 96, crop, true).ContainerStyle == whole &&
+                RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 160, 96, new(8, 4, 200, 48), true).ContainerStyle == whole &&
+                RoughCut.Desktop.PreviewCropGeometry.ForCrop(800, 400, 0, 0, crop, true).ContainerStyle == whole,
+                "An uncroppable or unmeasured preview did not fall back to the whole frame.");
+
+            // In the window, the measured box takes the crop's shape once the view has been laid out.
+            var projectPath = Path.Combine(root, "desktop-preview-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var clip = session.Project.Timeline.Single();
+            var active = clip.Crop ?? throw new Exception("Expected the prior crop edit.");
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            Assert(model.PlaybackCropStyle == whole, "The crop was applied before the view had been measured.");
+            // The measurement reads the laid-out document, so a frame has to have been laid out first.
+            document.DebugDump(1280, 800);
+            app.Present(1280, 800);
+            var shaped = model.PlaybackCropStyle;
+            Assert(shaped != whole && model.PlaybackFit == "contain",
+                $"The measured preview did not take the crop's shape: {shaped}");
+            using var debug = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+            var box = FindBox(debug.RootElement.GetProperty("tree"), "preview-crop");
+            var preview = FindBox(debug.RootElement.GetProperty("tree"), "preview");
+            Assert(Math.Abs(box[2] / box[3] - active.Width / (double)active.Height) < 0.01,
+                $"The rendered crop box is not the crop's shape: {box[2]:0.#}x{box[3]:0.#} for {active.Width}x{active.Height}.");
+            Assert(box[0] >= preview[0] - 0.5f && box[1] >= preview[1] - 0.5f &&
+                box[0] + box[2] <= preview[0] + preview[2] + 0.5f && box[1] + box[3] <= preview[1] + preview[3] + 0.5f,
+                "The crop box does not sit inside the preview area.");
+        });
+
+        await check("Clip boundary geometry moves one edge and stays inside the source", () =>
+        {
+            const long source = 4000;
+            var minimum = RoughCut.Desktop.ClipDragGeometry.MinimumTicks(new(1, 1000));
+            Assert(minimum == 20, "The shortest draggable clip should be twenty milliseconds at a 1/1000 time base.");
+            Assert(RoughCut.Desktop.ClipDragGeometry.MinimumTicks(new(1, 25)) == 1,
+                "A coarse time base should fall back to one tick.");
+
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.Start,
+                    250, source, minimum) == (1250L, 3000L),
+                "Dragging the start did not move only the in point.");
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    -250.4, source, minimum) == (1000L, 2750L),
+                "Dragging the end did not move only the out point.");
+
+            // Neither edge may pass the other, leave the source, or produce a clip too short to see.
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.Start,
+                    -5000, source, minimum) == (0L, 3000L) &&
+                RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.Start,
+                    5000, source, minimum) == (2980L, 3000L) &&
+                RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    5000, source, minimum) == (1000L, 4000L) &&
+                RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    -5000, source, minimum) == (1000L, 1020L),
+                "A boundary drag escaped the source or inverted the clip.");
+            Assert(RoughCut.Desktop.ClipDragGeometry.Update(1000, 3000, RoughCut.Desktop.ClipEdge.End,
+                    double.NaN, source, minimum) == (1000L, 3000L),
+                "An unmeasurable drag changed the clip.");
+            Throws<ArgumentOutOfRangeException>(() => RoughCut.Desktop.ClipDragGeometry.Update(
+                3000, 1000, RoughCut.Desktop.ClipEdge.End, 10, source, minimum));
+            Throws<ArgumentOutOfRangeException>(() => RoughCut.Desktop.ClipDragGeometry.Update(
+                0, 5000, RoughCut.Desktop.ClipEdge.End, 10, source, minimum));
+            return Task.CompletedTask;
+        });
+
+        await check("Dragging a clip boundary persists one revisioned trim", async () =>
+        {
+            var source = Path.Combine(root, "export source.mkv");
+            var info = await new MediaReader(RoughCut.Application.ToolSettings.Default.Ffmpeg,
+                RoughCut.Application.ToolSettings.Default.Ffprobe).InspectAsync(source);
+            var half = info.DurationTicks / 2;
+            var projectPath = Path.Combine(root, "desktop-boundary-project.json");
+            await new ProjectStore().SaveAsync(projectPath, new EditProject
+            {
+                ProjectId = "desktop-boundary",
+                TimeBase = info.TimeBase,
+                Assets = [new("source", "video", "export source.mkv", info.Sha256, info.DurationTicks,
+                    info.Width, info.Height, "video/x-matroska")],
+                // A long clip and a short one, so the row's shares can be told apart.
+                Timeline = [new("long", "source", 0, half), new("short", "source", half, half + half / 4)]
+            }, 0);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            using var document = new RoughCut.Desktop.RoughCutReviewApp(session).CreateDocument();
+            document.Refresh();
+            using var debug = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+            var longBox = FindBox(debug.RootElement.GetProperty("tree"), "clip selected");
+            var shortBox = FindBox(debug.RootElement.GetProperty("tree"), "clip ");
+            Assert(longBox[2] > shortBox[2] + 20,
+                $"Clips do not take their share of the timeline: {longBox[2]:0.#} against {shortBox[2]:0.#}.");
+
+            // Drag the long clip's end boundary left by a tenth of its width: a tenth of its duration.
+            var edge = FindBox(debug.RootElement.GetProperty("tree"), "clip-edge end");
+            var x = edge[0] + edge[2] / 2;
+            var y = edge[1] + edge[3] / 2;
+            var moved = longBox[2] / 10;
+            var revision = session.Project.Revision;
+            Assert(document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Down, x, y),
+                $"The clip boundary did not capture the pointer; its handle measured {edge[2]:0.#}x{edge[3]:0.#}.");
+            Assert(document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Move, x - moved, y) &&
+                document.DispatchPointer(1, CupriFace.Interaction.PointerPhase.Up, x - moved, y),
+                "The captured boundary drag was not handled through release.");
+            var expected = half - (long)Math.Round(half / 10.0, MidpointRounding.AwayFromZero);
+            var timeout = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (session.Project.Revision == revision && DateTime.UtcNow < timeout) await Task.Delay(25);
+            var saved = await new ProjectStore().LoadAsync(projectPath);
+            Assert(saved.Revision == revision + 1 && saved.Timeline[0].In == 0 &&
+                Math.Abs(saved.Timeline[0].Out - expected) <= 2 && saved.Timeline[1].In == half,
+                $"The drag did not trim only the dragged edge: {saved.Timeline[0].Out} against {expected}.");
+
+            await session.UndoAsync();
+            Assert(session.Project.Timeline[0].Out == half && !session.CanUndo,
+                "Undo did not restore the boundary the drag moved.");
         });
 
         await check("Desktop crop handle drag persists one revisioned edit", async () =>

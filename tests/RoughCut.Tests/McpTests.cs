@@ -32,7 +32,7 @@ internal static class McpTests
                 "roughcut_save_analysis", "roughcut_apply_analysis",
                 "roughcut_save_diarization", "roughcut_diarize_local", "roughcut_edit_speakers", "roughcut_plan_voice_replacement", "roughcut_import_voice_preview",
                 "roughcut_synthesize_voice", "roughcut_get_voice_preview", "roughcut_set_voice_replacement_state",
-                "roughcut_import_image", "roughcut_acquire_url", "roughcut_create_project_from_url", "roughcut_preflight_export",
+                "roughcut_import_image", "roughcut_acquire_url", "roughcut_create_project_from_url", "roughcut_preflight_export", "roughcut_preflight_delivery", "roughcut_start_delivery",
                 "roughcut_transcribe_local", "roughcut_start_export", "roughcut_get_job", "roughcut_cancel_job"];
             Assert(expected.All(names.Contains), "MCP tool list is incomplete.");
         });
@@ -240,6 +240,12 @@ internal static class McpTests
 
         await check("MCP enforces workspace paths and project revisions", async () =>
         {
+            // Point the host at a model that is not there, so "no model" is what is tested wherever this
+            // runs: the machine building this may well have fetched one into RoughCut's own store.
+            var previousModel = Environment.GetEnvironmentVariable("ROUGHCUT_STT_MODEL");
+            Environment.SetEnvironmentVariable("ROUGHCUT_STT_MODEL", Path.Combine(root, "absent-model.bin"));
+            try
+            {
             await using var client = await CreateClientAsync(command, arguments);
             var escaped = await client.CallToolAsync("roughcut_inspect_video", new Dictionary<string, object?> { ["mediaPath"] = "../outside.mkv" });
             Assert(escaped.IsError == true, "Workspace escape was accepted.");
@@ -257,8 +263,11 @@ internal static class McpTests
                 ["assetId"] = "source-1",
                 ["expectedRevision"] = 4L
             });
-            Assert(unconfiguredSpeech.IsError == true && unconfiguredSpeech.Content.OfType<TextContentBlock>().Single().Text.Contains("ROUGHCUT_STT_MODEL", StringComparison.Ordinal),
-                "Unconfigured local STT did not return an actionable error.");
+            Assert(unconfiguredSpeech.IsError == true &&
+                unconfiguredSpeech.Content.OfType<TextContentBlock>().Single().Text.Contains("roughcut_fetch_speech_model", StringComparison.Ordinal),
+                "Local STT without a model did not say how to get one.");
+            }
+            finally { Environment.SetEnvironmentVariable("ROUGHCUT_STT_MODEL", previousModel); }
         });
 
         await check("MCP caption assessment recommends and records a source", async () =>
@@ -307,7 +316,7 @@ internal static class McpTests
                 "MCP automatically applied a proposal requiring review.");
         });
 
-        await check("MCP image export jobs complete, persist and cancel safely", async () =>
+        await check("MCP delivery and image export jobs complete, persist and cancel safely", async () =>
         {
             await using var client = await CreateClientAsync(command, arguments);
             var completed = ReadJob(await client.CallToolAsync("roughcut_start_export", new Dictionary<string, object?>
@@ -324,6 +333,27 @@ internal static class McpTests
             }
             Assert(completed.Status == "succeeded" && File.Exists(Path.Combine(root, "mcp-image-export", "video.mkv")),
                 $"MCP timed-image export did not publish a validated bundle: {completed.Status}: {completed.Message}");
+            var deliveryPlan = await client.CallToolAsync("roughcut_preflight_delivery", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "delivery-project.json"
+            });
+            Assert(deliveryPlan.IsError != true &&
+                JsonSerializer.Deserialize(deliveryPlan.Content.OfType<TextContentBlock>().Single().Text, ProjectJson.Default.DeliveryPlan)!.Supported,
+                "MCP delivery preflight refused a renderable timeline.");
+            var deliveryJob = ReadJob(await client.CallToolAsync("roughcut_start_delivery", new Dictionary<string, object?>
+            {
+                ["projectPath"] = "delivery-project.json",
+                ["outputDirectory"] = "mcp-delivery"
+            }));
+            for (var attempt = 0; attempt < 400; attempt++)
+            {
+                await Task.Delay(25);
+                deliveryJob = ReadJob(await client.CallToolAsync("roughcut_get_job", new Dictionary<string, object?> { ["jobId"] = deliveryJob.JobId }));
+                if (deliveryJob.Status is "cancelled" or "failed" or "succeeded") break;
+            }
+            Assert(deliveryJob.Status == "succeeded" && deliveryJob.Mode == "delivery" &&
+                File.Exists(Path.Combine(root, "mcp-delivery", "video.mp4")),
+                $"MCP delivery job did not publish an H.264 bundle: {deliveryJob.Status}: {deliveryJob.Message}");
             var started = await client.CallToolAsync("roughcut_start_export", new Dictionary<string, object?>
             {
                 ["projectPath"] = "export-project.json",

@@ -7,11 +7,14 @@ namespace RoughCut.Application;
 public sealed record ExportJob(
     int SchemaVersion, string JobId, string Status, DateTimeOffset CreatedUtc,
     DateTimeOffset? StartedUtc, DateTimeOffset? FinishedUtc, int ProgressPercent,
-    string ProjectPath, string OutputDirectory, bool AllowEncoding, string? Message);
+    string ProjectPath, string OutputDirectory, bool AllowEncoding, string? Message,
+    // Absent in checkpoints written before delivery existed, which read back as the strict path they used.
+    string Mode = "strict", string Container = "mkv");
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(ExportJob))]
 [JsonSerializable(typeof(AcquisitionResult))]
+[JsonSerializable(typeof(SourceFormatList))]
 [JsonSerializable(typeof(UrlProjectResult))]
 public partial class ApplicationJson : JsonSerializerContext;
 
@@ -38,9 +41,12 @@ public sealed class ExportJobManager : IDisposable
         LoadCheckpoints();
     }
 
-    public ExportJob Start(string projectPath, string outputDirectory, bool allowEncoding)
+    public ExportJob Start(string projectPath, string outputDirectory, bool allowEncoding, string mode = "strict",
+        string container = "mkv")
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (mode is not ("strict" or "delivery" or "mux")) throw new ArgumentException("Export mode must be strict, delivery or mux.");
+        if (container is not ("mkv" or "mp4")) throw new ArgumentException("Container must be mkv or mp4.");
         _workspace.Resolve(projectPath);
         var output = _workspace.Resolve(outputDirectory, mustExist: false);
         if (File.Exists(output) || Directory.Exists(output)) throw new IOException("Output destination already exists.");
@@ -48,7 +54,8 @@ public sealed class ExportJobManager : IDisposable
         {
             if (_jobs.Count >= MaxJobs) throw new InvalidOperationException("Job retention limit reached; remove completed checkpoints before starting more work.");
             var job = new ExportJob(1, Guid.NewGuid().ToString("N"), "queued", DateTimeOffset.UtcNow,
-                null, null, 0, Normalize(projectPath), Normalize(outputDirectory), allowEncoding, "Waiting for the export worker.");
+                null, null, 0, Normalize(projectPath), Normalize(outputDirectory), allowEncoding,
+                "Waiting for the export worker.", mode, container);
             var cancellation = new CancellationTokenSource();
             _jobs.Add(job.JobId, job);
             _cancellations.Add(job.JobId, cancellation);
@@ -91,16 +98,29 @@ public sealed class ExportJobManager : IDisposable
                     Status = "running",
                     StartedUtc = DateTimeOffset.UtcNow,
                     ProgressPercent = 10,
-                    Message = "Exporting and validating the requested timeline."
+                    Message = current.Mode switch
+                    {
+                        "delivery" => "Re-encoding the requested timeline into a delivery file.",
+                        "mux" => "Copying the retained timeline into a new container.",
+                        _ => "Exporting and validating the requested timeline."
+                    }
                 });
-                await new ExportEngine(_ffmpeg, _ffprobe).ExportAsync(
-                    _workspace.Resolve(job.ProjectPath), _workspace.Resolve(job.OutputDirectory, mustExist: false), job.AllowEncoding, token);
+                var projectPath = _workspace.Resolve(job.ProjectPath);
+                var destination = _workspace.Resolve(job.OutputDirectory, mustExist: false);
+                if (job.Mode == "delivery") await new DeliveryExporter(_ffmpeg, _ffprobe).ExportAsync(projectPath, destination, token);
+                else if (job.Mode == "mux") await new MuxExporter(_ffmpeg, _ffprobe).ExportAsync(projectPath, destination, job.Container, token);
+                else await new ExportEngine(_ffmpeg, _ffprobe).ExportAsync(projectPath, destination, job.AllowEncoding, token);
                 Update(jobId, current => current with
                 {
                     Status = "succeeded",
                     FinishedUtc = DateTimeOffset.UtcNow,
                     ProgressPercent = 100,
-                    Message = "Validated export bundle published."
+                    Message = job.Mode switch
+                    {
+                        "delivery" => "Delivery bundle published.",
+                        "mux" => "Copied bundle published.",
+                        _ => "Validated export bundle published."
+                    }
                 });
             }
             finally { _gate.Release(); }
@@ -182,6 +202,8 @@ public sealed class ExportJobManager : IDisposable
     private static string SafeMessage(Exception exception) => exception switch
     {
         ExportRejectedException rejected => "Export rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
+        DeliveryRejectedException rejected => "Delivery rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
+        MuxRejectedException rejected => "Copy rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
         IOException or ArgumentException or NotSupportedException or InvalidDataException => exception.Message,
         _ => "Export failed; check the project, media tools and available disk space."
     };

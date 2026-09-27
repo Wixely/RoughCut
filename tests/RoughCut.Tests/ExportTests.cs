@@ -17,6 +17,13 @@ internal static class ExportTests
         throw new Exception($"Expected {typeof(T).Name}.");
     }
 
+    private static async Task<string> SaveAsync(ProjectStore store, string root, string name, EditProject project)
+    {
+        var path = Path.Combine(root, name);
+        await store.SaveAsync(path, project, 0);
+        return path;
+    }
+
     public static async Task RunAsync(Func<string, Func<Task>, Task> check, string[] args, string root)
     {
         var project = new EditProject
@@ -52,6 +59,42 @@ internal static class ExportTests
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "later", In: 0, Out: 5000)])));
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "later", In: 2000, Out: 2000)])));
             await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(edited, [new("set-range", "missing", In: 0, Out: 1)])));
+        });
+        await check("Insert-clip restores a removed clip exactly, and refuses anything else", async () =>
+        {
+            var full = project with
+            {
+                Assets = [.. project.Assets, new("still", "image", "still.png", new string('b', 64), 0, 160, 96, "image/png")],
+                Timeline = [new("first", "source-1", 0, 1000), new("middle", "source-1", 1000, 2000, new(8, 4, 80, 48), "cover", "silence"),
+                    new("last", "source-1", 2000, 3000)]
+            };
+            var removed = TimelineEditor.Apply(full, [new("remove", "middle")]);
+            Assert(removed.Timeline.Select(clip => clip.Id).SequenceEqual(["first", "last"]), "Remove did not drop the clip.");
+            var restored = TimelineEditor.Apply(removed, [new("insert-clip", "middle", In: 1000, Out: 2000,
+                Crop: new(8, 4, 80, 48), AssetId: "source-1", BeforeClipId: "last", Fit: "cover", Audio: "silence")]);
+            Assert(restored.Timeline.SequenceEqual(full.Timeline), "Insert-clip did not restore the exact clip in its place.");
+            Assert(TimelineEditor.Apply(TimelineEditor.Apply(full, [new("remove", "last")]),
+                [new("insert-clip", "last", In: 2000, Out: 3000, AssetId: "source-1")]).Timeline.Select(clip => clip.Id)
+                .SequenceEqual(["first", "middle", "last"]), "Insert-clip did not append a clip removed from the end.");
+
+            // Anything that is not an exact restoration of retained source material is refused.
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "first", In: 0, Out: 1000, AssetId: "source-1")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 1000, Out: 9000, AssetId: "source-1")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 2000, Out: 2000, AssetId: "source-1")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "still")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "missing")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "source-1", BeforeClipId: "absent")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "source-1", Audio: "music")])));
+            await Throws<ArgumentException>(() => Task.FromResult(TimelineEditor.Apply(removed,
+                [new("insert-clip", "middle", In: 0, Out: 1000, AssetId: "source-1", At: 5)])));
+            Assert(removed.Timeline.Length == 2, "A refused insertion changed the timeline.");
         });
         await check("SRT import retains provenance; cuts split, drop and reorder cues", async () =>
         {
@@ -209,6 +252,8 @@ internal static class ExportTests
             var strict = await planner.PreflightAsync(voiceProject with { ExportMode = "copy-only" }, path);
             Assert(!strict.Supported && strict.Issues.Any(issue => issue.Code == "unsupported-copy-only"),
                 "Strict copy-only accepted replacement rendering.");
+            Assert(DeliveryExporter.Plan(voiceProject, path).Issues.Single().Code == "unsupported-replacements",
+                "Delivery silently dropped an applied voice replacement instead of refusing it.");
             var partial = voiceProject with { Timeline = [new("partial", "source-1", 500, 1000)] };
             Assert((await planner.PreflightAsync(partial, path)).Issues.Any(issue => issue.Code == "unsupported-voice-edit"),
                 "A partially retained voice interval was rendered.");
@@ -313,6 +358,266 @@ internal static class ExportTests
             var report = await exporter.ExportAsync(path, Path.Combine(root, "h264 result"), allowEncoding: true);
             Assert(report.Plan.Streams[0].Action == "encode" && report.Validation.DecodedFrames == 20, "Encoded H.264 cut failed validation.");
         });
+        await check("Copy anchors are read from a bounded window, not a whole-file index", async () =>
+        {
+            // Ten seconds at 10 fps with a keyframe every two seconds, so the anchors are known in advance.
+            var anchored = Path.Combine(root, "anchored.mkv");
+            await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-f", "lavfi",
+                "-i", "testsrc2=size=160x96:rate=10:duration=10", "-f", "lavfi",
+                "-i", "sine=frequency=440:sample_rate=48000:duration=10", "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "libx264", "-g", "20", "-keyint_min", "20", "-sc_threshold", "0", "-pix_fmt", "yuv420p",
+                "-threads:v", "1", "-c:a", "libopus", "-b:a", "96k", "-n", anchored]);
+            var project = new EditProject
+            {
+                ProjectId = "anchors",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "anchored.mkv", await MediaReader.FingerprintAsync(anchored),
+                    10000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 10000)]
+            };
+            var path = Path.Combine(root, "anchors-project.json");
+            await store.SaveAsync(path, project, 0);
+
+            var reader = new CutPointReader(ffprobe);
+            var points = await reader.ReadAsync(project, path, "source", 5300);
+            Assert(Math.Abs(points.KeyframeIntervalSeconds - 2) < 0.15,
+                $"The source's own keyframe spacing was not measured: {points.KeyframeIntervalSeconds:0.###}s.");
+            Assert(points.Before is { Ticks: 4000, OffsetTicks: -1300 } && points.After is { Ticks: 6000, OffsetTicks: 700 },
+                "The anchors either side of the requested time are wrong: " +
+                $"{points.Before?.Ticks} and {points.After?.Ticks}.");
+            Assert(points.Anchors.Length >= 3 && points.Anchors.All(anchor => anchor.Ticks % 2000 == 0) &&
+                points.Anchors.Select(anchor => anchor.Ticks).SequenceEqual(points.Anchors.Select(anchor => anchor.Ticks).Order()),
+                "The anchors are not the source's keyframes in order.");
+            // Alignment is reported where audio was read and left unknown outside it, rather than guessed.
+            Assert(points.AudioPacketSeconds > 0 &&
+                points.Anchors.Where(anchor => anchor.Seconds >= 4 && anchor.Seconds <= 6).All(anchor => anchor.AudioAligned == true) &&
+                points.Anchors.Any(anchor => anchor.AudioAligned is null),
+                "Audio packet alignment was not reported, or was claimed outside the sampled audio.");
+            Assert(points.Guidance.Contains("re-encoding", StringComparison.Ordinal),
+                "The report does not say what cutting exactly would cost.");
+
+            // A request exactly on an anchor offers it as both neighbours: copying there costs nothing.
+            var exact = await reader.ReadAsync(project, path, "source", 6000);
+            Assert(exact.Before is { Ticks: 6000, OffsetTicks: 0 } && exact.After is { Ticks: 6000, OffsetTicks: 0 },
+                "A time already on a keyframe was not reported as a free cut.");
+
+            // An explicit window is honoured. A window too narrow to reach the next keyframe still reports
+            // the one behind, because reading an interval starts at the keyframe preceding it: copying can
+            // always begin there, and only the anchor ahead is out of view.
+            var narrow = await reader.ReadAsync(project, path, "source", 5300, 1000);
+            Assert(narrow.WindowTicks == 1000 && narrow.Before is { Ticks: 4000 } && narrow.After is null,
+                "A narrow window did not report the anchor behind, or invented one ahead.");
+            await Throws<ArgumentOutOfRangeException>(() => reader.ReadAsync(project, path, "source", 20000));
+            await Throws<KeyNotFoundException>(() => reader.ReadAsync(project, path, "absent", 1000));
+        });
+
+        await check("The audio profile measures level, band split and silence", async () =>
+        {
+            // Two seconds of 60 Hz, two of silence, two of 2 kHz: the band split must separate the tones
+            // and the silence floor must find the gap, whatever the levels happen to be.
+            var profiled = Path.Combine(root, "profiled.mkv");
+            await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-f", "lavfi",
+                "-i", "testsrc2=size=160x96:rate=10:duration=6", "-f", "lavfi",
+                "-i", "aevalsrc='if(lt(t,2),0.5*sin(2*PI*60*t),if(lt(t,4),0,0.5*sin(2*PI*2000*t)))':s=48000:d=6",
+                "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads:v", "1",
+                "-c:a", "libopus", "-b:a", "96k", "-n", profiled]);
+            var project = new EditProject
+            {
+                ProjectId = "profile",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "profiled.mkv", await MediaReader.FingerprintAsync(profiled),
+                    6000, 160, 96, "video/x-matroska")],
+                Timeline = [new("clip", "source", 0, 6000)]
+            };
+            var path = Path.Combine(root, "profile-project.json");
+            await store.SaveAsync(path, project, 0);
+
+            var profile = await new AudioProfiler(ffmpeg).ProfileAsync(project, path, "source", 0, 6000, 1000);
+            Assert(profile.Windows.Length == 6 && profile.BandSplitHz == 200 && profile.SilenceFloorDb == -60,
+                $"The profile did not cover the range in one-second windows: {profile.Windows.Length}.");
+            var low = profile.Windows[0];
+            // The second of the two silent seconds: the first still carries the codec's ringing from the
+            // tone before it, which is exactly why the share is unreliable near silence.
+            var silent = profile.Windows[3];
+            var high = profile.Windows[4];
+            Assert(low.LowBandShare > 0.9 && high.LowBandShare < 0.05,
+                $"The band split did not separate 60 Hz from 2 kHz: {low.LowBandShare:0.###} against {high.LowBandShare:0.###}.");
+            // A lossy codec does not reproduce digital silence exactly, so the written gap reads as mostly
+            // rather than entirely silent; what matters is that it is nothing like the tones either side.
+            Assert(silent.SilentFraction > 0.7 && low.SilentFraction < 0.05 && high.SilentFraction < 0.05,
+                $"Silence was not found where it was written: {silent.SilentFraction:0.##}.");
+            Assert(low.LevelDb > -20 && high.LevelDb > -20 && silent.LevelDb < -60 &&
+                low.PeakDb > low.LevelDb && silent.PeakDb < low.PeakDb - 20,
+                $"Levels or peaks do not describe loud tones against a silent gap: {low.LevelDb:0.#}/{silent.LevelDb:0.#}/{high.LevelDb:0.#} dB.");
+            Assert(low.LowBandDb > silent.LowBandDb + 20 && high.LowBandDb < low.LowBandDb - 20,
+                "The low-band level does not follow the tones.");
+            Assert(profile.Windows.All(window => window.LowBandShare is >= 0 and <= 1),
+                "A band share outside zero to one was reported; the filter's own ringing must be clamped.");
+
+            // Measurements only where they can be made: the range, window and band are all bounded.
+            await Throws<ArgumentException>(() => new AudioProfiler(ffmpeg).ProfileAsync(project, path, "source", 0, 6000, 1));
+            await Throws<ArgumentOutOfRangeException>(() => new AudioProfiler(ffmpeg).ProfileAsync(project, path, "source", 4000, 2000, 1000));
+            await Throws<ArgumentOutOfRangeException>(() => new AudioProfiler(ffmpeg).ProfileAsync(project, path, "source", 0, 6000, 1000, 5));
+            await Throws<KeyNotFoundException>(() => new AudioProfiler(ffmpeg).ProfileAsync(project, path, "absent", 0, 6000, 1000));
+        });
+
+        await check("Copying carries the source's own packets and starts every segment on a keyframe", async () =>
+        {
+            // The anchored fixture keeps a keyframe every two seconds, so the snapping is known in advance.
+            var anchored = Path.Combine(root, "anchored.mkv");
+            var project = new EditProject
+            {
+                ProjectId = "copy",
+                TimeBase = new(1, 1000),
+                Assets = [new("source", "video", "anchored.mkv", await MediaReader.FingerprintAsync(anchored),
+                    10000, 160, 96, "video/x-matroska")],
+                Timeline = [new("first", "source", 3000, 7000), new("second", "source", 8000, 10000)]
+            };
+            var path = Path.Combine(root, "copy-project.json");
+            await store.SaveAsync(path, project, 0);
+            var exporter = new MuxExporter(ffmpeg, ffprobe);
+
+            var plan = await exporter.PlanAsync(project, path);
+            Assert(plan.Supported && plan.VideoCodec == "h264" && plan.AudioCodec == "opus" && plan.Container == "mkv",
+                "The copy plan did not report the source's own codecs.");
+            // Only the start moves: 3000 sits between anchors and takes the earlier one; 8000 is already an
+            // anchor; both ends stay exactly where they were asked for.
+            Assert(plan.Segments[0] is { CopyIn: 2000, CopyOut: 7000, InOffsetTicks: -1000, OutOffsetTicks: 0 } &&
+                plan.Segments[1] is { CopyIn: 8000, CopyOut: 10000, InOffsetTicks: 0, OutOffsetTicks: 0 } &&
+                plan.WorstOffsetTicks == 1000 && plan.CopiedDuration == 7000,
+                "The copy plan moved the wrong boundaries: " +
+                string.Join("; ", plan.Segments.Select(segment => $"{segment.ClipId} {segment.CopyIn}-{segment.CopyOut}")));
+
+            var destination = Path.Combine(root, "copied result");
+            var report = await exporter.ExportAsync(path, destination);
+            var output = Path.Combine(destination, "video.mkv");
+            Assert(File.Exists(output) && File.Exists(Path.Combine(destination, "mux.json")) &&
+                report.OutputSha256 == await MediaReader.FingerprintAsync(output) &&
+                report.SourceSha256 == project.Assets[0].Sha256,
+                "The copied bundle is incomplete or does not describe itself.");
+            Assert(Math.Abs(report.ActualSeconds - 7) < 0.3,
+                $"The copied output is {report.ActualSeconds:0.###}s where seven seconds were copied.");
+
+            // Every packet is the source's own: the codecs are unchanged and the picture starts on a
+            // keyframe. It may start a fraction of a second in, because the audio packets copied whole
+            // around the cut can begin before the first picture does.
+            var probe = await ToolProcess.RunAsync(ffprobe, ["-v", "error", "-select_streams", "v:0",
+                "-show_entries", "packet=pts_time,flags", "-read_intervals", "%+1", "-of", "csv=p=0", output]);
+            var first = Encoding.UTF8.GetString(probe.Output).Split('\n')[0].Split(',');
+            Assert(first[1].Contains('K', StringComparison.Ordinal) &&
+                double.Parse(first[0], System.Globalization.CultureInfo.InvariantCulture) <= 0.5,
+                $"The copied output does not begin on a keyframe promptly: {string.Join(",", first)}.");
+            // Two segments meet once, so the muxer may move a few audio packets there; it must say so.
+            Assert(report.JoinAdjustments < 200,
+                $"The join moved {report.JoinAdjustments} packets, which is more than meeting once should cost.");
+
+            // What copying cannot do, it refuses rather than quietly rendering.
+            var cropped = project with { ProjectId = "copy-crop", Timeline = [project.Timeline[0] with { Crop = new(0, 0, 80, 48) }] };
+            Assert((await exporter.PlanAsync(cropped, path)).Issues.Single().Code == "unsupported-crop",
+                "A crop was accepted by a path that copies packets.");
+            Assert((await exporter.PlanAsync(project, path, "mp4")).Issues.Any(issue => issue.Code == "unsupported-container") == false,
+                "H.264 was refused for MP4, which carries it.");
+            await Throws<IOException>(() => exporter.ExportAsync(path, destination));
+        });
+
+        await check("Delivery renders a timeline the strict matrix refuses, in order and at the claimed length", async () =>
+        {
+            // H.264 video with AAC audio in MP4: ordinary acquired material, outside the validated copy matrix.
+            var deliverySource = Path.Combine(root, "delivery source.mp4");
+            await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", source, "-map", "0:v:0", "-map", "0:a:0",
+                "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-threads:v", "1", "-c:a", "aac", "-b:a", "128k", "-n", deliverySource]);
+            var delivered = project with
+            {
+                ProjectId = "delivery",
+                Revision = 1,
+                Assets = [project.Assets[0] with { Path = "delivery source.mp4", MediaType = "video/mp4", Sha256 = await MediaReader.FingerprintAsync(deliverySource) }]
+            };
+            var path = Path.Combine(root, "delivery-project.json");
+            await store.SaveAsync(path, delivered, 0);
+            var strict = await planner.PreflightAsync(delivered, path);
+            Assert(!strict.Supported, "The strict path accepted AAC audio it cannot prove it copied.");
+            var plan = DeliveryExporter.Plan(delivered, path);
+            Assert(plan.Supported && plan.Width == 160 && plan.Height == 96 && plan.Duration == 2000 &&
+                plan.Clips.Select(clip => clip.ClipId).SequenceEqual(new[] { "later", "clip-1" }), "Delivery preflight mapped the timeline incorrectly.");
+            var before = await MediaReader.FingerprintAsync(deliverySource);
+            var destination = Path.Combine(root, "delivery result");
+            var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination);
+            var output = Path.Combine(destination, "video.mp4");
+            Assert(report.ExpectedSeconds == 2 && Math.Abs(report.ActualSeconds - 2) <= 0.05 && report.SilencedAssets.Length == 0 &&
+                report.OutputSha256 == await MediaReader.FingerprintAsync(output) && report.OutputBytes == new FileInfo(output).Length,
+                "Delivery report does not describe the published file.");
+            Assert(Directory.EnumerateFiles(destination).Count() == 3 && File.Exists(Path.Combine(destination, "captions.srt")) &&
+                report.Captions.Length == 2, "Delivery bundle is incomplete or retained intermediate files.");
+            Assert(await MediaReader.FingerprintAsync(deliverySource) == before, "Delivery modified its source.");
+            // Independent oracle: the visible binary frame IDs survive the encode and prove the cut and the order.
+            var pixels = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", output,
+                "-map", "0:v:0", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]);
+            Assert(pixels.Output.Length == 20 * 160 * 96 * 3, "Delivered file does not hold the twenty retained frames.");
+            for (int frame = 0; frame < 20; frame++)
+            {
+                int identifier = 0;
+                for (int bit = 0; bit < 6; bit++)
+                {
+                    int pixel = frame * 160 * 96 * 3 + (4 * 160 + bit * 16 + 4) * 3;
+                    if (pixels.Output[pixel] > 128) identifier |= 1 << bit;
+                }
+                Assert(identifier == (frame < 10 ? frame + 20 : frame - 10), "Delivered frames are in the wrong order or come from the wrong interval.");
+            }
+            await Throws<IOException>(() => new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination));
+            var changed = Path.Combine(root, "delivery-changed.json");
+            await store.SaveAsync(changed, delivered with { ProjectId = "delivery-changed", Assets = [delivered.Assets[0] with { Sha256 = new string('0', 64) }] }, 0);
+            await Throws<InvalidDataException>(() => new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(changed, Path.Combine(root, "delivery changed result")));
+            Assert(!Directory.Exists(Path.Combine(root, "delivery changed result")) &&
+                !Directory.EnumerateDirectories(root, ".roughcut-delivery-*").Any(), "A rejected delivery left a published or staged output.");
+        });
+        await check("Delivery crops, silences and refuses what it cannot render faithfully", async () =>
+        {
+            var deliverySource = Path.Combine(root, "delivery source.mp4");
+            var asset = new MediaAsset("source-1", "video", "delivery source.mp4",
+                await MediaReader.FingerprintAsync(deliverySource), 4000, 160, 96, "video/mp4");
+            var cropped = new EditProject
+            {
+                ProjectId = "delivery-crop",
+                TimeBase = new(1, 1000),
+                Assets = [asset],
+                Timeline = [new("cropped", "source-1", 1000, 2000, new(8, 4, 81, 48)), new("silent", "source-1", 2000, 3000, Audio: "silence")]
+            };
+            var path = Path.Combine(root, "delivery-crop-project.json");
+            await store.SaveAsync(path, cropped, 0);
+            var destination = Path.Combine(root, "delivery crop result");
+            var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination);
+            // An odd crop width cannot be encoded as H.264; delivery rounds it down rather than inventing a column.
+            Assert(report.Plan.Width == 80 && report.Plan.Height == 48 && report.Captions.Length == 0 &&
+                !File.Exists(Path.Combine(destination, "captions.srt")), "Delivery did not fit the timeline to an encodable frame.");
+            var probe = await ToolProcess.RunAsync(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                "-of", "csv=p=0", "-i", Path.Combine(destination, "video.mp4")]);
+            Assert(Encoding.UTF8.GetString(probe.Output).Trim() == "80,48", "Delivered frame size differs from the plan.");
+            var pcm = await ToolProcess.RunAsync(ffmpeg, ["-v", "error", "-nostdin", "-i", Path.Combine(destination, "video.mp4"),
+                "-map", "0:a:0", "-f", "s16le", "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "pipe:1"]);
+            // Lossy audio never decodes to exact zeroes, so silence is judged by peak amplitude, not equality.
+            int Peak(ReadOnlySpan<byte> samples)
+            {
+                var peak = 0;
+                for (var offset = 0; offset + 1 < samples.Length; offset += 2)
+                    peak = Math.Max(peak, Math.Abs((int)System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(samples[offset..])));
+                return peak;
+            }
+            Assert(Peak(pcm.Output.AsSpan(0, 96000)) > 2000 && Peak(pcm.Output.AsSpan(280000)) < 256,
+                "A clip asking for silence did not deliver silence, or source audio was lost.");
+            var image = cropped with
+            {
+                ProjectId = "delivery-image",
+                Assets = [asset, new("still", "image", "inserted.png", new string('c', 64), 0, 80, 96, "image/png")],
+                Timeline = [new("hold", "still", 0, 1000, Audio: "silence")]
+            };
+            Assert(DeliveryExporter.Plan(image, path).Issues.Single().Code == "unsupported-timeline", "Delivery silently omitted a timed image.");
+            var missing = cropped with { ProjectId = "delivery-missing", Assets = [asset with { Path = "absent.mp4" }] };
+            Assert(DeliveryExporter.Plan(missing, path).Issues.Single().Code == "missing-media", "Delivery accepted missing media.");
+            var imagePath = await SaveAsync(store, root, "delivery-image-project.json", image);
+            await Throws<DeliveryRejectedException>(() => new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(
+                imagePath, Path.Combine(root, "delivery image result")));
+            Assert(!Directory.Exists(Path.Combine(root, "delivery image result")), "A refused delivery created output.");
+        });
         await check("PCM cuts inside packets require encoding while PNG can stay copied", async () =>
         {
             var unalignedAudioPath = Path.Combine(root, "pcm-blocks.mkv");
@@ -360,7 +665,7 @@ internal static class ExportTests
             var cli = Path.GetFullPath(args[cliOption + 1]);
             Task<ToolResult> RunCli(params string[] arguments) => cli.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                 ? ToolProcess.RunAsync("dotnet", new[] { cli }.Concat(arguments)) : ToolProcess.RunAsync(cli, arguments);
-            await check("CLI caption import, edit, preflight, export and stale-edit rejection", async () =>
+            await check("CLI caption import, edit, preflight, export, delivery and stale-edit rejection", async () =>
             {
                 var path = Path.Combine(root, "cli-export.json");
                 await RunCli("create", source, path);
@@ -386,6 +691,15 @@ internal static class ExportTests
                 var encodedDestination = Path.Combine(root, "cli encoded result");
                 await Throws<MediaToolException>(() => RunCli("export", path, encodedDestination));
                 Assert(!Directory.Exists(encodedDestination), "CLI encoded output without explicit permission.");
+                var deliveryPlanResult = await RunCli("preflight-delivery", Path.Combine(root, "delivery-project.json"));
+                var deliveryPlan = JsonSerializer.Deserialize(deliveryPlanResult.Output, ProjectJson.Default.DeliveryPlan)!;
+                Assert(deliveryPlan.Supported && deliveryPlan.Clips.Length == 2, "CLI delivery preflight failed.");
+                var deliveryDestination = Path.Combine(root, "cli delivery result");
+                var deliveryResult = await RunCli("deliver", Path.Combine(root, "delivery-project.json"), deliveryDestination);
+                var deliveryReport = JsonSerializer.Deserialize(deliveryResult.Output, ProjectJson.Default.DeliveryReport)!;
+                Assert(deliveryReport.ExpectedSeconds == 2 && File.Exists(Path.Combine(deliveryDestination, "video.mp4")),
+                    "CLI delivery did not publish a bundle.");
+                await Throws<MediaToolException>(() => RunCli("deliver", Path.Combine(root, "delivery-project.json"), deliveryDestination));
                 var encoded = await RunCli("export", path, encodedDestination, "--allow-encode");
                 var encodedReport = JsonSerializer.Deserialize(encoded.Output, ProjectJson.Default.ExportReport)!;
                 Assert(encodedReport.Plan.Revision == 4 && encodedReport.Plan.Width == 80 && encodedReport.Plan.Streams[0].Action == "encode" &&

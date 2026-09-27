@@ -14,6 +14,29 @@ public static class TimeMath
         return checked((long)result);
     }
 
+    /// Rounds to the nearest tick. Only for a quantity that was already an estimate — a speech boundary a
+    /// model guessed, say. An edit boundary decides which frames survive and must use ExactTicks.
+    public static long NearestTicks(MediaTime time, TimeBase target)
+    {
+        if (!time.TimeBase.IsValid || !target.IsValid) throw new ArgumentException("Invalid time base.");
+        var numerator = (BigInteger)time.Ticks * time.TimeBase.Numerator * target.Denominator;
+        var denominator = (BigInteger)time.TimeBase.Denominator * target.Numerator;
+        var result = BigInteger.DivRem(numerator, denominator, out var remainder);
+        if (BigInteger.Abs(remainder) * 2 >= BigInteger.Abs(denominator)) result += time.Ticks < 0 ? -1 : 1;
+        return checked((long)result);
+    }
+
+    /// Rounds towards zero. For a length being measured rather than a boundary being cut: a source's own
+    /// duration is rarely a whole number of milliseconds, and rounding down never claims material that is
+    /// not there.
+    public static long FloorTicks(MediaTime time, TimeBase target)
+    {
+        if (!time.TimeBase.IsValid || !target.IsValid) throw new ArgumentException("Invalid time base.");
+        var numerator = (BigInteger)time.Ticks * time.TimeBase.Numerator * target.Denominator;
+        var denominator = (BigInteger)time.TimeBase.Denominator * target.Numerator;
+        return checked((long)(numerator / denominator));
+    }
+
     public static MediaTime Add(MediaTime left, MediaTime right)
     {
         if (!left.TimeBase.IsValid || !right.TimeBase.IsValid) throw new ArgumentException("Invalid time base.");
@@ -30,7 +53,7 @@ public static class TimeMath
 public sealed record EditOperation(string Action, string? ClipId = null, long? In = null,
     long? Out = null, long? At = null, string? NewClipId = null, string[]? Order = null,
     Crop? Crop = null, string? Mode = null, string? AssetId = null, long? Duration = null,
-    string? BeforeClipId = null, string? Fit = null);
+    string? BeforeClipId = null, string? Fit = null, string? Audio = null);
 
 public static class TimelineEditor
 {
@@ -45,7 +68,7 @@ public static class TimelineEditor
         {
             if (operation is null) throw new ArgumentException("Null edit operation.");
             var index = clips.FindIndex(c => c.Id == operation.ClipId);
-            if (operation.Action is not ("reorder" or "export-mode" or "insert-image") && index < 0)
+            if (operation.Action is not ("reorder" or "export-mode" or "insert-image" or "insert-clip") && index < 0)
                 throw new ArgumentException("Edit references an unknown clip.");
             var fields = new HashSet<string>();
             if (operation.ClipId is not null) fields.Add("clipId");
@@ -60,6 +83,7 @@ public static class TimelineEditor
             if (operation.Duration is not null) fields.Add("duration");
             if (operation.BeforeClipId is not null) fields.Add("beforeClipId");
             if (operation.Fit is not null) fields.Add("fit");
+            if (operation.Audio is not null) fields.Add("audio");
             string[] allowed = operation.Action switch
             {
                 "trim" => ["clipId", "in", "out"],
@@ -70,6 +94,7 @@ public static class TimelineEditor
                 "crop" => ["clipId", "crop"],
                 "export-mode" => ["mode"],
                 "insert-image" => ["clipId", "assetId", "duration", "beforeClipId", "fit"],
+                "insert-clip" => ["clipId", "assetId", "in", "out", "crop", "fit", "audio", "beforeClipId"],
                 _ => throw new ArgumentException("Unknown edit action.")
             };
             if (fields.Except(allowed).Any()) throw new ArgumentException("Edit contains fields unrelated to its action.");
@@ -102,6 +127,24 @@ public static class TimelineEditor
                     clips.Insert(index + 1, clip with { Id = operation.NewClipId, In = at });
                     break;
                 case "remove": clips.RemoveAt(index); break;
+                // The inverse of remove. Without it a removed video clip could not be put back, so an
+                // interactive editor could not offer removal at all and keep its undo exact.
+                case "insert-clip":
+                    var restored = project.Assets.SingleOrDefault(asset => asset.Id == operation.AssetId);
+                    if (string.IsNullOrWhiteSpace(operation.ClipId) || clips.Any(c => c.Id == operation.ClipId) ||
+                        restored is not { Kind: "video" } ||
+                        operation.In is not { } restoredIn || operation.Out is not { } restoredOut ||
+                        restoredIn < 0 || restoredIn >= restoredOut || restoredOut > restored.Duration)
+                        throw new ArgumentException("Insert-clip requires a new clip ID and a nonempty interval inside a video source.");
+                    if (operation.Audio is not (null or "source" or "silence"))
+                        throw new ArgumentException("Insert-clip audio policy must be source or silence.");
+                    var restorePosition = operation.BeforeClipId is null
+                        ? clips.Count
+                        : clips.FindIndex(existing => existing.Id == operation.BeforeClipId);
+                    if (restorePosition < 0) throw new ArgumentException("Insert-clip references an unknown before-clip ID.");
+                    clips.Insert(restorePosition, new(operation.ClipId!, restored.Id, restoredIn, restoredOut,
+                        operation.Crop, operation.Fit ?? "contain", operation.Audio ?? "source"));
+                    break;
                 case "crop": clips[index] = clips[index] with { Crop = operation.Crop }; break;
                 case "reorder":
                     if (operation.Order is not { } order || order.Any(id => id is null) ||

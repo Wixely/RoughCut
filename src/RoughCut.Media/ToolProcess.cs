@@ -7,8 +7,11 @@ public sealed record ToolResult(byte[] Output, string Error);
 
 public static class ToolProcess
 {
+    /// `allowDiagnostics` hands the tool's warnings back instead of treating them as failure. Only for a
+    /// caller that inspects them and decides: silence is not the same as having looked.
     public static async Task<ToolResult> RunAsync(string executable, IEnumerable<string> arguments,
-        int outputLimit = 16 * 1024 * 1024, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+        int outputLimit = 16 * 1024 * 1024, TimeSpan? timeout = null, bool allowDiagnostics = false,
+        CancellationToken cancellationToken = default)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         lifetime.CancelAfter(timeout ?? TimeSpan.FromSeconds(60));
@@ -55,7 +58,7 @@ public static class ToolProcess
             if (process.ExitCode != 0)
                 throw new MediaToolException(process.ExitCode, errorText);
             // With -v error, decoding diagnostics indicate an unreliable result even on exit 0.
-            if (!string.IsNullOrWhiteSpace(errorText)) throw new MediaToolException(process.ExitCode, errorText);
+            if (!allowDiagnostics && !string.IsNullOrWhiteSpace(errorText)) throw new MediaToolException(process.ExitCode, errorText);
             return new(await output, errorText);
         }
         finally

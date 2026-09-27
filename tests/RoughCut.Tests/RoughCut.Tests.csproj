@@ -7,6 +7,6 @@
     <ProjectReference Include="../../src/RoughCut.Application/RoughCut.Application.csproj" />
     <ProjectReference Include="../../src/RoughCut.Speech.Sherpa/RoughCut.Speech.Sherpa.csproj" />
     <ProjectReference Include="../../src/RoughCut.Desktop/RoughCut.Desktop.csproj" />
-    <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
+    <PackageReference Include="ModelContextProtocol" Version="[1.4.0]" />
   </ItemGroup>
 </Project>

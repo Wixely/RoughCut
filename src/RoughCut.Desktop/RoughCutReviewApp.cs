@@ -17,8 +17,15 @@ public sealed class RoughCutReviewApp : CupriApp
     private DesktopReviewSession? _session;
     private CupriDocument? _document;
     private CancellationTokenSource? _playbackCancellation;
+    private CancellationTokenSource? _exportCancellation;
     private long _playbackGeneration;
     private CropDragState? _cropDrag;
+    private TransportDragState? _transportDrag;
+    private ClipDragState? _clipDrag;
+    private long _transportShownAt;
+    private (float Width, float Height) _previewBox;
+    private string _previewKey = "";
+    private string _transportPosition = "";
 
     public RoughCutReviewApp(DesktopReviewSession? session = null,
         DesktopPlaybackController? playback = null, RecentProjects? recent = null)
@@ -34,6 +41,11 @@ public sealed class RoughCutReviewApp : CupriApp
 
     private sealed record CropDragState(CropDragMode Mode, Crop Start, float PointerX, float PointerY,
         int SourceWidth, int SourceHeight, double Scale);
+
+    private sealed record TransportDragState(float TrackX, float TrackWidth);
+
+    private sealed record ClipDragState(string ClipId, ClipEdge Edge, long StartIn, long StartOut,
+        long SourceDuration, long MinimumTicks, double TicksPerPixel, float PointerX, long In, long Out);
 
     public override string Title => "RoughCut Review";
     private static readonly byte[] ApplicationIcon = LoadIcon();
@@ -77,6 +89,8 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".apply-trim", _ => StartCommand(ApplyTrimAsync, seekAfter: true, rebuildPlayback: true));
         document.OnClick(".split-clip", _ => StartCommand(() => Session.SplitSelectedClipAsync(),
             seekAfter: true, rebuildPlayback: true));
+        document.OnClick(".remove-clip", _ => StartCommand(() => Session.RemoveSelectedClipAsync(),
+            seekAfter: true, rebuildPlayback: true));
         document.OnClick(".move-earlier", _ => StartCommand(() => Session.MoveSelectedClipAsync(-1),
             seekAfter: true, rebuildPlayback: true));
         document.OnClick(".move-later", _ => StartCommand(() => Session.MoveSelectedClipAsync(1),
@@ -85,7 +99,12 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".redo", _ => StartCommand(() => UndoRedoAsync(redo: true), seekAfter: true, rebuildPlayback: true));
         document.OnClick(".reload", _ => StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true));
         document.OnClick(".exact-preview", _ => StartExactPreview());
+        document.OnClick(".export", _ => ToggleExport());
+        document.OnClick(".transport-play", _ => TogglePlay());
+        document.OnClick(".transport-mute", _ => ToggleMute());
+        document.OnPointer("data-transport", HandleTransportPointer);
         document.OnPointer("data-crop-drag", HandleCropPointer);
+        document.OnPointer("data-clip-drag", HandleClipPointer);
         document.OnClick(".recent-open", e => OpenProject(Required(e, "data-path")));
         document.OnClick(".open-path", _ => OpenOrCreate(_model.OpenPath));
         document.OnClick(".browse", _ => Browse(create: false));
@@ -167,7 +186,56 @@ public sealed class RoughCutReviewApp : CupriApp
             _model.Status = "Playback stopped: " + exception.Message;
             playback?.Pause();
         }
+        UpdateTransport();
+        UpdatePreviewCrop();
         return base.Present(width, height);
+    }
+
+    /// A cropped clip has to play cropped, and that needs the preview's real size: the crop is applied by
+    /// enlarging and offsetting the picture inside a box shaped like the crop. The box is measured from the
+    /// laid-out document, and only a change in that size, the crop or the playing state costs a refresh.
+    private void UpdatePreviewCrop()
+    {
+        if (_session is null || _document?.Root is not { } root) return;
+        if (FindByClass(root, "preview") is not { Width: > 0, Height: > 0 } preview) return;
+        var playing = playback?.Playing == true;
+        var key = FormattableString.Invariant(
+            $"{preview.Width:0.#}x{preview.Height:0.#}|{CropKey()}|{playing}|{Session.Playback is not null}");
+        if (key == _previewKey) return;
+        _previewKey = key;
+        _previewBox = (preview.Width, preview.Height);
+        ApplyPreviewCrop();
+        _document.Refresh();
+    }
+
+    private string CropKey()
+    {
+        var clip = Session.Project.Timeline.FirstOrDefault(item => item.Id == Session.SelectedClipId);
+        return clip?.Crop is { } crop
+            ? FormattableString.Invariant($"{crop.X},{crop.Y},{crop.Width},{crop.Height}") : "none";
+    }
+
+    private static CupriFace.Dom.RenderNode? FindByClass(CupriFace.Dom.RenderNode node, string cssClass)
+    {
+        if (node.Element?.ClassList.Contains(cssClass) == true) return node;
+        foreach (var child in node.Children)
+            if (FindByClass(child, cssClass) is { } found) return found;
+        return null;
+    }
+
+    /// The transport is redrawn while the picture moves, which needs a document refresh. It is throttled to
+    /// ten a second and skipped when the reading has not changed, so a still picture costs nothing.
+    private void UpdateTransport()
+    {
+        if (_session is null || playback is not { IsOpen: true } || _transportDrag is not null) return;
+        var now = Environment.TickCount64;
+        if (now - _transportShownAt < 100) return;
+        _transportShownAt = now;
+        var position = TimelineTransport.Format(TimelinePositionSeconds());
+        if (position == _transportPosition) return;
+        _transportPosition = position;
+        ApplyTransport();
+        _document?.Refresh();
     }
 
     private void StartReview()
@@ -374,11 +442,142 @@ public sealed class RoughCutReviewApp : CupriApp
         }
     }
 
+    /// Timeline seconds the player is showing. An exact render is already the timeline; the source copy is
+    /// not, so its position is mapped back through the clip that is playing.
+    private double TimelinePositionSeconds()
+    {
+        if (_session is null || playback is null) return 0;
+        if (Session.Playback is not null) return playback.PositionSeconds;
+        var mapping = Session.Mapping;
+        return mapping.Length == 0 ? 0
+            : TimelinePlayback.OutputSeconds(mapping, Session.Project.TimeBase, _clipIndex, playback.PositionSeconds);
+    }
+
+    private double TimelineDurationSeconds()
+    {
+        if (_session is null) return 0;
+        if (Session.Playback is not null) return playback?.DurationSeconds ?? 0;
+        return TimelineTransport.Duration(Session.Mapping, Session.Project.TimeBase);
+    }
+
+    /// Seeks to a timeline second, which for the source copy means finding the clip that covers it.
+    private void SeekTimeline(double seconds)
+    {
+        if (_session is null || playback is null) return;
+        _ended = false;
+        if (Session.Playback is not null)
+        {
+            playback.Seek(seconds);
+            return;
+        }
+        var mapping = Session.Mapping;
+        if (mapping.Length == 0) return;
+        var step = TimelinePlayback.Locate(mapping, Session.Project.TimeBase, seconds);
+        _clipIndex = step.ClipIndex;
+        if (step.SeekSeconds is { } source) playback.Seek(source);
+    }
+
+    private void TogglePlay()
+    {
+        if (playback is not { IsOpen: true }) return;
+        if (playback.Playing) playback.Pause();
+        else
+        {
+            // Pressing play on a finished edit starts it over, rather than stopping again on the next frame.
+            if (_ended) SeekTimeline(0);
+            playback.Play();
+        }
+        ApplyTransport();
+        _document?.Refresh();
+    }
+
+    private void ToggleMute()
+    {
+        if (playback is not { IsOpen: true }) return;
+        playback.Muted = !playback.Muted;
+        ApplyTransport();
+        _document?.Refresh();
+    }
+
+    private bool HandleTransportPointer(MultiPointerEvent pointer)
+    {
+        if (_session is null || playback is not { IsOpen: true }) return false;
+        if (pointer.Phase == PointerPhase.Down)
+        {
+            // The event carries no layout, so the track is found by hit test and its box kept for the drag.
+            if (pointer.Pointers.Count != 1 || _document?.HitTest(pointer.X, pointer.Y) is not { } node) return false;
+            var track = Ancestor(node, "data-transport");
+            if (track is null || track.Width <= 0) return false;
+            _transportDrag = new(track.X, track.Width);
+        }
+        if (_transportDrag is not { } drag) return true;
+        if (pointer.Phase == PointerPhase.Cancel)
+        {
+            _transportDrag = null;
+            return true;
+        }
+        var seconds = TimelineTransport.Seek(pointer.X, drag.TrackX, drag.TrackWidth, TimelineDurationSeconds());
+        SeekTimeline(seconds);
+        if (pointer.Phase == PointerPhase.Up) _transportDrag = null;
+        _transportPosition = TimelineTransport.Format(seconds);
+        ApplyTransport();
+        _document?.Refresh();
+        return true;
+    }
+
+    private static CupriFace.Dom.RenderNode? Ancestor(CupriFace.Dom.RenderNode node, string attribute)
+    {
+        for (var current = node; current is not null; current = current.Parent)
+            if (current.Element?.HasAttribute(attribute) == true) return current;
+        return null;
+    }
+
     /// Builds the validated export-backed render on request. This is the only place the desktop renders
     /// video, and it is explicit rather than a side effect of editing.
     private void StartExactPreview() => StartPlaybackPreparation(exact: true);
 
     private void StartPlaybackPreparation() => StartPlaybackPreparation(exact: false);
+
+    /// Exporting runs for as long as the encode takes, so the same button cancels it. A cancelled export
+    /// publishes nothing, and the project is never changed by exporting it.
+    private void ToggleExport()
+    {
+        CancellationTokenSource? running;
+        lock (_playbackSync) running = _exportCancellation;
+        if (running is not null)
+        {
+            _model.Status = "Canceling the export…";
+            _document?.Refresh();
+            running.Cancel();
+            return;
+        }
+        if (_session is null) return;
+        var cancellation = new CancellationTokenSource();
+        lock (_playbackSync) _exportCancellation = cancellation;
+        _model.ExportLabel = "Cancel export";
+        _model.Status = "Exporting the timeline…";
+        _model.ExportStatus = "Exporting…";
+        _document?.Refresh();
+        _ = Task.Run(async () =>
+        {
+            Exception? failure = null;
+            try { await Session.DeliverAsync(cancellation.Token); }
+            catch (Exception exception) { failure = exception; }
+            lock (_playbackSync)
+            {
+                if (ReferenceEquals(_exportCancellation, cancellation)) _exportCancellation = null;
+            }
+            cancellation.Dispose();
+            Post(() =>
+            {
+                _model.ExportLabel = ExportAction;
+                // The export's own outcome is shown beside the preview; the status line carries any failure.
+                Complete(failure is OperationCanceledException ? null : failure, seekAfter: false);
+            });
+        });
+    }
+
+    private const string ExportAction = "Export MP4";
 
     private void StartPlaybackPreparation(bool exact)
     {
@@ -498,6 +697,61 @@ public sealed class RoughCutReviewApp : CupriApp
         return true;
     }
 
+    /// A boundary drag moves one edge of one clip. The clip's own rendered width gives the scale, so the
+    /// mapping stays right whatever the layout does to a very short clip.
+    private bool HandleClipPointer(MultiPointerEvent pointer)
+    {
+        if (_session is null) return false;
+        if (pointer.Phase == PointerPhase.Down)
+        {
+            if (_work.IsBusy || _clipDrag is not null || pointer.Pointers.Count != 1 ||
+                pointer.Element?.GetAttribute("data-id") is not { Length: > 0 } clipId ||
+                pointer.Value is not ("start" or "end") ||
+                Session.Project.Timeline.FirstOrDefault(item => item.Id == clipId) is not { } clip ||
+                Session.Project.Assets.FirstOrDefault(item => item.Id == clip.AssetId) is not { Kind: "video" } asset ||
+                _document?.HitTest(pointer.X, pointer.Y) is not { } node ||
+                Ancestor(node, "data-clip-box") is not { Width: > 0 } body)
+                return false;
+            var timeBase = Session.Project.TimeBase;
+            _clipDrag = new(clipId, pointer.Value == "start" ? ClipEdge.Start : ClipEdge.End,
+                clip.In, clip.Out, asset.Duration, ClipDragGeometry.MinimumTicks(timeBase),
+                (clip.Out - clip.In) / (double)body.Width, pointer.X, clip.In, clip.Out);
+            _model.Status = "Drag the clip boundary and release to save.";
+            _document?.Refresh();
+            return true;
+        }
+
+        if (_clipDrag is not { } drag) return false;
+        if (pointer.Phase == PointerPhase.Cancel)
+        {
+            _clipDrag = null;
+            _model.Status = "Boundary drag canceled.";
+            _document?.Refresh();
+            return true;
+        }
+        var (start, end) = ClipDragGeometry.Update(drag.StartIn, drag.StartOut, drag.Edge,
+            (pointer.X - drag.PointerX) * drag.TicksPerPixel, drag.SourceDuration, drag.MinimumTicks);
+        _clipDrag = drag with { In = start, Out = end };
+        // The pending interval is shown while dragging; only release spends a revision on it.
+        _model.ClipSummary = FormattableString.Invariant(
+            $"{drag.ClipId} · pending source {start}–{end}");
+        _model.TrimIn = start.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        _model.TrimOut = end.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (pointer.Phase == PointerPhase.Up)
+        {
+            _clipDrag = null;
+            if (start == drag.StartIn && end == drag.StartOut)
+            {
+                _model.Status = "Ready";
+                Rebuild(preserveStatus: true);
+            }
+            else StartCommand(() => Session.TrimClipAsync(drag.ClipId, start, end),
+                seekAfter: true, rebuildPlayback: true);
+        }
+        _document?.Refresh();
+        return true;
+    }
+
     private bool TryCropContext(out MediaAsset asset, out Crop crop)
     {
         if (_session is null)
@@ -564,11 +818,10 @@ public sealed class RoughCutReviewApp : CupriApp
         var playbackPath = Session.Playback?.Path ?? Session.PlaybackCopy?.Path;
         _model.PlaybackUri = playbackPath is null ? "" : new Uri(playbackPath).AbsoluteUri;
         _model.ExactClass = Session.Playback is null ? "" : "hidden";
-        // The exact still already shows the true crop. Scaling the player to match would distort it, because
-        // the preview box cannot take the crop's aspect ratio in this layout engine; see the desktop guide.
-        _model.PlaybackCropStyle = "width:100%;height:100%";
-        _model.PlaybackFit = "contain";
+        ApplyPreviewCrop();
         _model.PlaybackStatus = Session.PlaybackStatus;
+        _model.ExportStatus = Session.DeliveryStatus;
+        ApplyTransport();
         _model.SourcePreviewDataUri = Session.SourcePreview is null ? "" :
             "data:image/png;base64," + Convert.ToBase64String(Session.SourcePreview.Png);
         _model.Selection = Session.Selection;
@@ -599,6 +852,8 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.SplitSummary = splitAt is { } tick
             ? FormattableString.Invariant($"Split at source tick {tick}")
             : "Select an interior source frame to split this clip";
+        // Removing the only clip would leave nothing to preview and nothing the window could put back.
+        _model.RemoveClass = selectedClip is not null && selectedAsset?.Kind == "video" && project.Timeline.Length > 1 ? "" : "hidden";
         _model.MoveEarlierClass = clipIndex > 0 ? "" : "hidden";
         _model.MoveLaterClass = clipIndex >= 0 && clipIndex < project.Timeline.Length - 1 ? "" : "hidden";
         _model.Speakers = project.Speakers.Select(item => new SpeakerRow
@@ -619,12 +874,18 @@ public sealed class RoughCutReviewApp : CupriApp
             CssClass = item.Id == Session.SelectedSegmentId ? "selected" : ""
         }).ToArray();
         // Mapping is prepared by the session, so an unopenable project cannot throw from the view.
-        _model.Clips = Session.Mapping.Take(200).Select(item => new ClipRow
+        // Clips take their share of the row, so the timeline reads as the edit's shape and a boundary
+        // drag moves a distance that matches what it changes.
+        var mapped = Session.Mapping.Take(200).ToArray();
+        var total = mapped.Sum(item => (double)(item.OutputOut - item.OutputIn));
+        _model.Clips = mapped.Select(item => new ClipRow
         {
             Id = item.ClipId,
             Range = $"{FormatTime(item.OutputIn, project.TimeBase)}–{FormatTime(item.OutputOut, project.TimeBase)}",
             Source = item.AssetId,
-            CssClass = item.ClipId == Session.SelectedClipId ? "selected" : ""
+            CssClass = item.ClipId == Session.SelectedClipId ? "selected" : "",
+            Style = FormattableString.Invariant(
+                $"flex-grow:{(total > 0 ? (item.OutputOut - item.OutputIn) / total * mapped.Length : 1):0.###}")
         }).ToArray();
         // A proposal whose observation is missing is skipped rather than allowed to break the whole view.
         _model.Evidence = project.Proposals.Take(100)
@@ -639,6 +900,43 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.Truncation = project.Speech.Length > 500 ? $"Showing 500 of {project.Speech.Length} transcript rows" : "";
         if (!preserveStatus) _model.Status = "Ready";
     }
+
+    /// An exact render already contains the cropped pixels, so only the source copy is cropped by the view.
+    private void ApplyPreviewCrop()
+    {
+        var clip = _session is null ? null :
+            Session.Project.Timeline.FirstOrDefault(item => item.Id == Session.SelectedClipId);
+        var asset = clip is null || _session is null ? null :
+            Session.Project.Assets.FirstOrDefault(item => item.Id == clip.AssetId);
+        var crop = _session is not null && Session.Playback is null ? clip?.Crop : null;
+        var layout = PreviewCropGeometry.ForCrop(_previewBox.Width, _previewBox.Height,
+            asset?.Width ?? 0, asset?.Height ?? 0, crop, playback?.Playing == true);
+        _model.PlaybackCropStyle = layout.ContainerStyle;
+        _model.PlaybackVideoStyle = layout.VideoStyle;
+        _model.PlaybackFit = layout.Fit;
+    }
+
+    /// Writes the transport in timeline time, so the numbers under the picture describe the edit rather
+    /// than the source copy the player is actually decoding.
+    private void ApplyTransport()
+    {
+        var duration = TimelineDurationSeconds();
+        // Shown whenever a timeline can be located, so a headless render shows the window a person sees.
+        // Its controls are inert when no decoder opened a player, which the playback status already reports.
+        _model.TransportClass = _session is not null && duration > 0 ? "" : "hidden";
+        var position = _transportDrag is null && playback is { IsOpen: true } ? TimelinePositionSeconds() : ParsedPosition();
+        _model.TransportPosition = TimelineTransport.Format(position);
+        _model.TransportDuration = TimelineTransport.Format(duration);
+        _model.TransportLabel = playback?.Playing == true ? "Pause" : "Play";
+        _model.TransportMuteLabel = playback?.Muted == true ? "Unmute" : "Mute";
+        var fraction = TimelineTransport.Fraction(position, duration);
+        _model.TransportFillStyle = FormattableString.Invariant($"width:{fraction * 100:0.###}%");
+        _model.TransportThumbStyle = FormattableString.Invariant($"left:{fraction * 100:0.###}%");
+    }
+
+    private double ParsedPosition() =>
+        TimeSpan.TryParse(_transportPosition, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed.TotalSeconds : 0;
 
     private static string Required(CupriPointerEvent e, string attribute) =>
         e.Element.GetAttribute(attribute) ?? throw new InvalidDataException($"UI element is missing {attribute}.");
@@ -691,16 +989,18 @@ public sealed class RoughCutReviewApp : CupriApp
             <section class="workspace {{WorkspaceClass}}">
               <div class="stage-column">
                 <div class="preview-card">
-                  <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" controls label="Project timeline playback"></cupri-video></div></div>
-                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button></div>
+                  <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" style="{{PlaybackVideoStyle}}" label="Project timeline playback"></cupri-video></div></div>
+                  <div class="transport {{TransportClass}}"><cupri-button class="transport-play" variant="ghost">{{TransportLabel}}</cupri-button><div class="transport-track" data-transport="seek"><div class="transport-fill" style="{{TransportFillStyle}}"></div><span class="transport-thumb" style="{{TransportThumbStyle}}"></span></div><span class="transport-time">{{TransportPosition}} / {{TransportDuration}}</span><cupri-button class="transport-mute" variant="ghost">{{TransportMuteLabel}}</cupri-button></div>
+                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button><cupri-button class="export">{{ExportLabel}}</cupri-button></div>
                   <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
+                  <div class="export-meta">{{ExportStatus}}</div>
                 </div>
                 <div class="timeline-card">
                   <div class="section-title">Timeline</div>
-                  <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></button></div>
+                  <div class="timeline"><button class="clip {{CssClass}}" data-repeat="Clips" data-id="{{Id}}" data-clip-box="{{Id}}" style="{{Style}}"><span class="clip-edge start" data-clip-drag="start" data-id="{{Id}}"></span><span class="clip-body"><strong>{{Id}}</strong><span>{{Range}}</span><small>{{Source}}</small></span><span class="clip-edge end" data-clip-drag="end" data-id="{{Id}}"></span></button></div>
                   <div class="clip-editor {{ClipEditorClass}}">
                     <div class="clip-summary">{{ClipSummary}} · {{SplitSummary}}</div>
-                    <div class="clip-controls"><label><span>IN</span><cupri-textfield value="{{TrimIn}}"></cupri-textfield></label><label><span>OUT</span><cupri-textfield value="{{TrimOut}}"></cupri-textfield></label><div class="clip-actions"><cupri-button class="apply-trim">Apply trim</cupri-button><cupri-button class="split-clip {{SplitClass}}" variant="ghost">Split</cupri-button><cupri-button class="move-earlier {{MoveEarlierClass}}" variant="ghost">Earlier</cupri-button><cupri-button class="move-later {{MoveLaterClass}}" variant="ghost">Later</cupri-button></div></div>
+                    <div class="clip-controls"><label><span>IN</span><cupri-textfield value="{{TrimIn}}"></cupri-textfield></label><label><span>OUT</span><cupri-textfield value="{{TrimOut}}"></cupri-textfield></label><div class="clip-actions"><cupri-button class="apply-trim">Apply trim</cupri-button><cupri-button class="split-clip {{SplitClass}}" variant="ghost">Split</cupri-button><cupri-button class="remove-clip {{RemoveClass}}" variant="ghost">Remove</cupri-button><cupri-button class="move-earlier {{MoveEarlierClass}}" variant="ghost">Earlier</cupri-button><cupri-button class="move-later {{MoveLaterClass}}" variant="ghost">Later</cupri-button></div></div>
                   </div>
                 </div>
                 <div class="evidence-card">
@@ -750,18 +1050,32 @@ public sealed class RoughCutReviewApp : CupriApp
         .launcher-url { display:grid; grid-template-columns:minmax(0,1fr) 96px; gap:8px; align-items:center; padding-top:12px; margin-top:8px; border-top:1px solid var(--line); }
         .launcher-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding-top:8px; } .launcher-actions.hidden { display:none; }
         .launcher-open { display:grid; grid-template-columns:minmax(0,1fr) 72px; gap:8px; align-items:center; padding-top:8px; }
-        .stage-column { min-width:0; display:grid; grid-template-rows:minmax(300px,1fr) 190px 130px; gap:14px; }
+        .stage-column { min-width:0; display:grid; grid-template-rows:minmax(300px,1fr) 190px 130px; gap:14px; min-height:0; }
         .preview-card,.timeline-card,.evidence-card,.review-panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; }
-        .preview-card { min-height:350px; padding:12px; display:flex; flex-direction:column; }
-        .preview { flex:1; min-height:300px; display:flex; align-items:center; justify-content:center; background:#05070b; border-radius:8px; overflow:hidden; }
+        .preview-card { min-height:300px; padding:12px; display:flex; flex-direction:column; }
+        .preview { flex:1; min-height:180px; display:flex; align-items:center; justify-content:center; background:#05070b; border-radius:8px; overflow:hidden; }
         .preview { position:relative; }
-        .preview-crop { position:absolute; }
-        .preview cupri-video { width:100%; height:100%; }
-        .preview-actions { display:flex; justify-content:flex-end; padding-top:8px; } .preview-actions .hidden { display:none; }
+        /* The crop box clips the enlarged picture inside it while a cropped clip plays. */
+        .preview-crop { position:absolute; overflow:hidden; }
+        .preview cupri-video { position:absolute; }
+        .transport { display:grid; grid-template-columns:92px minmax(0,1fr) auto 92px; gap:10px; align-items:center; padding-top:10px; } .transport.hidden { display:none; }
+        /* Buttons size to their cell, which would otherwise leave a squeezed track between two wide ones. */
+        .transport cupri-button { box-sizing:border-box; min-width:0; width:92px; }
+        .transport-track { position:relative; height:10px; border-radius:5px; background:#05070b; border:1px solid var(--line); cursor:pointer; }
+        .transport-fill { position:absolute; left:0; top:0; height:100%; border-radius:5px; background:var(--accent); }
+        .transport-thumb { position:absolute; top:-3px; width:14px; height:14px; margin-left:-7px; border-radius:50%; border:2px solid #fff; box-sizing:border-box; background:var(--accent); }
+        .transport-time { color:var(--muted); font-size:11px; }
+        .preview-actions { display:flex; gap:8px; justify-content:flex-end; padding-top:8px; } .preview-actions .hidden { display:none; }
+        .export-meta { padding:6px 4px 0; color:var(--muted); font-size:11px; }
         .preview-meta { padding:10px 4px 0; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:12px; } .preview-meta strong { color:var(--text); }
         .section-title { padding:12px 14px 8px; color:var(--muted); text-transform:uppercase; letter-spacing:1.2px; font-size:11px; font-weight:bold; }
         .timeline { display:flex; gap:6px; padding:0 12px 12px; overflow:hidden; }
-        .clip { min-width:112px; flex:1; padding:9px; border:0; border-radius:7px; background:var(--panel2); border-top:3px solid var(--accent); display:flex; flex-direction:column; gap:3px; text-align:left; cursor:pointer; }
+        /* The boundary handles are laid out beside the labels rather than over them: an absolutely
+           positioned child is offset from the content box here, so it would sit on the clip's own text. */
+        .clip { min-width:112px; flex:1 1 0; padding:0; border:0; border-radius:7px; background:var(--panel2); border-top:3px solid var(--accent); display:flex; align-items:stretch; text-align:left; cursor:pointer; overflow:hidden; }
+        .clip-body { flex:1 1 0; min-width:0; padding:9px 6px; display:flex; flex-direction:column; gap:3px; }
+        .clip-edge { flex:0 0 10px; width:10px; cursor:ew-resize; background:#ff9f4355; }
+        .clip:hover .clip-edge,.clip.selected .clip-edge { background:var(--accent); }
         .clip:hover,.clip.selected { background:#263249; }
         .clip span,.clip small { color:var(--muted); font-size:10px; }
         .evidence-card { max-height:150px; overflow:hidden; padding-bottom:8px; } .empty { color:var(--muted); font-size:11px; padding:0 14px 8px; }
@@ -807,10 +1121,20 @@ public sealed partial class ReviewModel
     public string Revision { get; set; } = "";
     public string PreviewDataUri { get; set; } = "";
     public string PlaybackUri { get; set; } = "";
-    public string PlaybackCropStyle { get; set; } = "width:100%;height:100%";
+    public string PlaybackCropStyle { get; set; } = "left:0;top:0;width:100%;height:100%";
+    public string PlaybackVideoStyle { get; set; } = "left:0;top:0;width:100%;height:100%";
     public string PlaybackFit { get; set; } = "contain";
     public string ExactClass { get; set; } = "";
     public string PlaybackStatus { get; set; } = "";
+    public string ExportStatus { get; set; } = "";
+    public string ExportLabel { get; set; } = "Export MP4";
+    public string TransportClass { get; set; } = "hidden";
+    public string TransportLabel { get; set; } = "Play";
+    public string TransportMuteLabel { get; set; } = "Mute";
+    public string TransportPosition { get; set; } = "0:00.000";
+    public string TransportDuration { get; set; } = "0:00.000";
+    public string TransportFillStyle { get; set; } = "width:0%";
+    public string TransportThumbStyle { get; set; } = "left:0%";
     public string SourcePreviewDataUri { get; set; } = "";
     public string Selection { get; set; } = "";
     public string Crop { get; set; } = "";
@@ -827,6 +1151,7 @@ public sealed partial class ReviewModel
     public string ClipSummary { get; set; } = "";
     public string SplitSummary { get; set; } = "";
     public string SplitClass { get; set; } = "hidden";
+    public string RemoveClass { get; set; } = "hidden";
     public string MoveEarlierClass { get; set; } = "hidden";
     public string MoveLaterClass { get; set; } = "hidden";
     public string TrimIn { get; set; } = "0";
@@ -849,5 +1174,5 @@ public sealed partial class ReviewModel
 [CupriBindable] public sealed partial class RecentRow { public string Path { get; set; } = ""; public string Name { get; set; } = ""; public string Folder { get; set; } = ""; public string ProjectId { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeakerRow { public string Id { get; set; } = ""; public string Label { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeechRow { public string Id { get; set; } = ""; public string Time { get; set; } = ""; public string Speaker { get; set; } = ""; public string Text { get; set; } = ""; public string Badge { get; set; } = ""; public string CssClass { get; set; } = ""; }
-[CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; public string CssClass { get; set; } = ""; }
+[CupriBindable] public sealed partial class ClipRow { public string Id { get; set; } = ""; public string Range { get; set; } = ""; public string Source { get; set; } = ""; public string CssClass { get; set; } = ""; public string Style { get; set; } = ""; }
 [CupriBindable] public sealed partial class EvidenceRow { public string Id { get; set; } = ""; public string Decision { get; set; } = ""; public string Summary { get; set; } = ""; }

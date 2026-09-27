@@ -22,7 +22,13 @@ try
     var ffmpeg = tools.Ffmpeg;
     var ffprobe = tools.Ffprobe;
     var ytDlp = tools.YtDlp;
-    var speechModel = Environment.GetEnvironmentVariable("ROUGHCUT_STT_MODEL");
+    // Without an explicit path the model lives with RoughCut's own per-user state. The transcriber
+    // downloads and verifies it against its pinned size and hash on first use, so a caller that has never
+    // configured anything can still transcribe rather than being told it cannot.
+    var speechModel = Environment.GetEnvironmentVariable("ROUGHCUT_STT_MODEL") is { Length: > 0 } configuredModel
+        ? configuredModel
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "RoughCut", "models", "ggml-base.en.bin");
     var speechLanguage = Environment.GetEnvironmentVariable("ROUGHCUT_STT_LANGUAGE") ?? "en";
     var speechChunkSeconds = int.TryParse(Environment.GetEnvironmentVariable("ROUGHCUT_STT_CHUNK_SECONDS"), out var configuredChunk)
         ? configuredChunk : LocalSpeechProcessor.DefaultChunkSeconds;

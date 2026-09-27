@@ -206,6 +206,53 @@ public sealed class DesktopReviewSession
     private string PreviewStatus() => PlaybackCopy is null ? "No preview copy is available" :
         $"Approximated timeline over a preview copy · {PlaybackCopy.Length / 1024d / 1024d:0.0} MiB";
 
+    public string DeliveryStatus { get; private set; } = "Export writes an MP4 beside the project";
+    public string? DeliveredPath { get; private set; }
+
+    /// Renders the saved timeline to a deliverable H.264/AAC MP4 in a new folder beside the project. This is
+    /// the only file the window produces for somebody else to watch, and it is always an explicit action.
+    /// It re-encodes: it delivers the edit, not an untouched copy of the source.
+    public async Task<DeliveryReport> DeliverAsync(CancellationToken token = default)
+    {
+        // Preflight starts no process, so an unrenderable timeline is refused with its reason immediately
+        // rather than after an encode.
+        var plan = DeliveryExporter.Plan(Project, ProjectPath);
+        if (!plan.Supported)
+        {
+            DeliveryStatus = string.Join(" ", plan.Issues.Select(issue => issue.Message));
+            throw new InvalidOperationException(DeliveryStatus);
+        }
+        var destination = UnusedDirectory(Path.GetDirectoryName(ProjectPath)!,
+            Path.GetFileNameWithoutExtension(ProjectPath) + "-export");
+        DeliveryStatus = FormattableString.Invariant(
+            $"Exporting {plan.Width}×{plan.Height} MP4 from revision {plan.Revision}…");
+        try
+        {
+            var report = await new DeliveryExporter(Tools.Ffmpeg, Tools.Ffprobe).ExportAsync(ProjectPath, destination, token);
+            DeliveredPath = Path.Combine(destination, "video.mp4");
+            var name = Path.Combine(Path.GetFileName(destination), "video.mp4");
+            DeliveryStatus = FormattableString.Invariant(
+                $"Exported {name} · {report.OutputBytes / 1024d / 1024d:0.0} MiB · {report.ActualSeconds:0.0}s from revision {report.Plan.Revision}");
+            return report;
+        }
+        catch (OperationCanceledException)
+        {
+            DeliveryStatus = "Export canceled; nothing was published.";
+            throw;
+        }
+        catch (DeliveryRejectedException rejected)
+        {
+            DeliveryStatus = string.Join(" ", rejected.Plan.Issues.Select(issue => issue.Message));
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
+            InvalidOperationException or KeyNotFoundException or ProjectValidationException or MediaToolException)
+        {
+            DeliveryStatus = exception.Message;
+            throw;
+        }
+    }
+
     public void PlaybackUnavailable(string message) => InvalidatePlayback(message);
 
     public void UsePlaybackPreview(string path)
@@ -293,10 +340,17 @@ public sealed class DesktopReviewSession
     }
 
     // Uses set-range rather than trim so the reviewer can restore retained source material and undo stays exact.
-    public async Task TrimSelectedClipAsync(long inTicks, long outTicks, CancellationToken token = default)
+    public Task TrimSelectedClipAsync(long inTicks, long outTicks, CancellationToken token = default) =>
+        TrimClipAsync(RequireSelectedVideoClip("trimmed").Id, inTicks, outTicks, token);
+
+    /// Trims a named clip, for the timeline's draggable boundaries: the drag knows which edge of which clip
+    /// it moved, not which clip happens to be selected.
+    public async Task TrimClipAsync(string clipId, long inTicks, long outTicks, CancellationToken token = default)
     {
-        var clip = RequireSelectedVideoClip("trimmed");
+        var clip = Project.Timeline.SingleOrDefault(item => item.Id == clipId)
+            ?? throw new InvalidOperationException("That clip is no longer on the timeline.");
         var asset = Project.Assets.Single(item => item.Id == clip.AssetId);
+        if (asset.Kind != "video") throw new InvalidOperationException("Only video clips can be trimmed in desktop review.");
         if (inTicks < 0 || inTicks >= outTicks || outTicks > asset.Duration)
             throw new InvalidOperationException("A trim must keep a nonempty interval inside the source.");
         if (clip.In == inTicks && clip.Out == outTicks) return;
@@ -318,6 +372,23 @@ public sealed class DesktopReviewSession
         var selected = Preview?.Info;
         await ApplyTimelineAsync([new("split", clip.Id, At: source.Ticks, NewClipId: newClipId)], token);
         _undo.Push(new SplitChange(clip.Id, clip.In, clip.Out, source.Ticks, newClipId));
+        _redo.Clear();
+        await RefreshAfterTimelineAsync(selected, token);
+    }
+
+    /// Removing is paired with insert-clip, which puts the exact clip back where it was, so the reviewer
+    /// can cut material out and still undo it. A timeline always keeps at least one clip: an empty one has
+    /// nothing to preview, and nothing in the window could add a clip back.
+    public async Task RemoveSelectedClipAsync(CancellationToken token = default)
+    {
+        var clip = RequireSelectedVideoClip("removed");
+        if (Project.Timeline.Length <= 1)
+            throw new InvalidOperationException("The timeline must keep at least one clip; trim this one instead.");
+        var index = Array.FindIndex(Project.Timeline, item => item.Id == clip.Id);
+        var before = index + 1 < Project.Timeline.Length ? Project.Timeline[index + 1].Id : null;
+        var selected = Preview?.Info;
+        await ApplyTimelineAsync([new("remove", clip.Id)], token);
+        _undo.Push(new RemovalChange(clip, before));
         _redo.Clear();
         await RefreshAfterTimelineAsync(selected, token);
     }
@@ -481,6 +552,13 @@ public sealed class DesktopReviewSession
                     : [new("remove", split.NewClipId), new("set-range", split.ClipId, In: split.In, Out: split.Out)],
                     token);
                 return true;
+            case RemovalChange removal:
+                await ApplyTimelineAsync(forward
+                    ? [new("remove", removal.Clip.Id)]
+                    : [new("insert-clip", removal.Clip.Id, In: removal.Clip.In, Out: removal.Clip.Out,
+                        Crop: removal.Clip.Crop, AssetId: removal.Clip.AssetId, BeforeClipId: removal.BeforeClipId,
+                        Fit: removal.Clip.Fit, Audio: removal.Clip.Audio)], token);
+                return true;
             case OrderChange order:
                 await ApplyTimelineAsync([new("reorder", Order: forward ? order.After : order.Before)], token);
                 return true;
@@ -494,4 +572,5 @@ public sealed class DesktopReviewSession
     private sealed record RangeChange(string ClipId, long BeforeIn, long BeforeOut, long AfterIn, long AfterOut) : ReviewChange;
     private sealed record SplitChange(string ClipId, long In, long Out, long At, string NewClipId) : ReviewChange;
     private sealed record OrderChange(string[] Before, string[] After) : ReviewChange;
+    private sealed record RemovalChange(TimelineClip Clip, string? BeforeClipId) : ReviewChange;
 }

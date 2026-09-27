@@ -194,34 +194,68 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
             () => operations.SetVoiceStateAsync(projectPath, expectedRevision, replacementId, state, cancellationToken),
             ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_list_source_formats", ReadOnly = true)]
+    [Description("List the renditions a source URL offers — identifier, size, bitrate, resolution and codecs — without downloading any of them. Choose one and pass its identifier to an acquisition, or pass a policy name: highest, medium or lowest bitrate within the download bound.")]
+    public Task<CallToolResult> ListSourceFormatsAsync(string sourceUrl, CancellationToken cancellationToken,
+        string? denoPath = null)
+        => TextAsync(() => operations.ListSourceFormatsAsync(sourceUrl, denoPath ?? ToolSettings.Default.Deno,
+            cancellationToken), ApplicationJson.Default.SourceFormatList);
+
     [McpServerTool(Name = "roughcut_acquire_url")]
     [Description("Acquire one HTTP(S) video plus available subtitles through a configured standalone yt-dlp into a new bounded workspace directory.")]
     public Task<CallToolResult> AcquireAsync(string sourceUrl, string destinationDirectory,
-        CancellationToken cancellationToken, string? denoPath = null)
+        CancellationToken cancellationToken, string? denoPath = null,
+        [Description("A format identifier from roughcut_list_source_formats, two joined by '+', or a policy: highest, medium or lowest. Defaults to medium.")]
+        string? format = null)
         => TextAsync(() => operations.AcquireAsync(sourceUrl, destinationDirectory,
-            denoPath ?? ToolSettings.Default.Deno, cancellationToken),
+            denoPath ?? ToolSettings.Default.Deno, cancellationToken, format),
             ApplicationJson.Default.AcquisitionResult);
 
     [McpServerTool(Name = "roughcut_create_project_from_url")]
     [Description("Acquire one HTTP(S) video plus its subtitles, create a project beside the downloaded media and select the best caption track, in one bounded step. Use this instead of composing acquire, create and select_captions by hand; the yt-dlp subtitle and format policy is fixed by RoughCut.")]
     public Task<CallToolResult> CreateProjectFromUrlAsync(string sourceUrl, string destinationDirectory,
-        CancellationToken cancellationToken, string? denoPath = null, string preferredLanguage = "en")
+        CancellationToken cancellationToken, string? denoPath = null, string preferredLanguage = "en",
+        [Description("A format identifier from roughcut_list_source_formats, two joined by '+', or a policy: highest, medium or lowest. Defaults to medium.")]
+        string? format = null)
         => TextAsync(() => operations.CreateProjectFromUrlAsync(sourceUrl, destinationDirectory,
-            denoPath ?? ToolSettings.Default.Deno, preferredLanguage, cancellationToken),
+            denoPath ?? ToolSettings.Default.Deno, preferredLanguage, cancellationToken, format),
             ApplicationJson.Default.UrlProjectResult);
+
+    [McpServerTool(Name = "roughcut_fetch_speech_model")]
+    [Description("Fetch the pinned base.en speech model if it is not already here, checking it against its published size and SHA-256, and report where it sits. Transcription refuses when the model is absent rather than downloading it unannounced, so call this once first.")]
+    public async Task<CallToolResult> FetchSpeechModelAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var path = Path.GetFullPath(speech.ModelPath!);
+            using var transcriber = new WhisperLocalSpeechTranscriber(path, speech.Language);
+            await transcriber.EnsureModelAsync(cancellationToken);
+            var file = new FileInfo(path);
+            return new() { Content = [new TextContentBlock { Text = JsonSerializer.Serialize(
+                new SpeechModelStatus(path, file.Length, true), McpJson.Default.SpeechModelStatus) }] };
+        }
+        catch (Exception exception) { return Error(exception); }
+    }
 
     [McpServerTool(Name = "roughcut_transcribe_local")]
     [Description("Transcribe one project media asset locally with the configured pinned Whisper base.en model, persist timed speech/captions, and advance the expected revision.")]
     public async Task<CallToolResult> TranscribeLocalAsync(string projectPath, string assetId, long expectedRevision,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [Description("Seconds of audio before each chunk given to the model as context and then discarded, 0 to half the chunk. Models invent a fragment at the start of a window, so without it every chunk boundary fabricates speech. Defaults to 3.")]
+        int? overlapSeconds = null)
     {
         try
         {
             if (string.IsNullOrWhiteSpace(speech.ModelPath))
-                throw new InvalidOperationException("Local STT requires ROUGHCUT_STT_MODEL to name the verified base.en model path.");
+                throw new InvalidOperationException("Local STT has no model path; set ROUGHCUT_STT_MODEL or call roughcut_fetch_speech_model.");
+            // The model is fetched deliberately, never as a surprise inside a transcribe: a caller who has
+            // not got one is told how to get it rather than waiting on an unannounced download.
+            if (!File.Exists(Path.GetFullPath(speech.ModelPath)))
+                throw new InvalidOperationException(
+                    $"No speech model at {speech.ModelPath}; call roughcut_fetch_speech_model, or set ROUGHCUT_STT_MODEL to one you already have.");
             using var transcriber = new WhisperLocalSpeechTranscriber(Path.GetFullPath(speech.ModelPath), speech.Language);
             var project = await operations.TranscribeLocalAsync(projectPath, assetId, expectedRevision,
-                transcriber, speech.ChunkSeconds, cancellationToken);
+                transcriber, speech.ChunkSeconds, cancellationToken, overlapSeconds);
             return new() { Content = [new TextContentBlock { Text = JsonSerializer.Serialize(project, ProjectJson.Default.EditProject) }] };
         }
         catch (Exception exception) { return Error(exception); }
@@ -234,10 +268,49 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         => TextAsync(() => operations.ImportPngAsync(projectPath, assetId, base64Png, expectedRevision,
             provider, modelVersion, cancellationToken), ProjectJson.Default.EditProject);
 
+    [McpServerTool(Name = "roughcut_profile_audio", ReadOnly = true)]
+    [Description("Measure a source's sound over a range, one window at a time: level and peak in dBFS, the share of energy below a band split, and how much of the window is silent. Music carrying bass and drums shows a far higher low-band share than speech or room tone at the same level, so these separate sections a caller must otherwise guess at. Measurements only — deciding what they mean is the caller's.")]
+    public Task<CallToolResult> ProfileAudioAsync(string projectPath, string assetId, long fromTicks,
+        long toTicks, long windowTicks, CancellationToken cancellationToken,
+        [Description("Band split in Hz, 20 to 2000. 200 Hz separates bass and drums from speech.")]
+        int bandSplitHz = 200)
+        => TextAsync(() => operations.ProfileAudioAsync(projectPath, assetId, fromTicks, toTicks, windowTicks,
+            bandSplitHz, cancellationToken), MediaJson.Default.AudioProfile);
+
+    [McpServerTool(Name = "roughcut_list_cut_points", ReadOnly = true)]
+    [Description("List where a stream copy may begin or end near a time in one source: the keyframe anchors behind and ahead, how far each sits from the time you asked for, whether audio packets align there, and the source's own keyframe spacing. Read from a bounded window, so it is fast on long sources. Use it to decide between copying at an anchor and cutting exactly, which re-encodes the material from the preceding anchor up to the cut.")]
+    public Task<CallToolResult> ListCutPointsAsync(string projectPath, string assetId, long atTicks,
+        CancellationToken cancellationToken,
+        [Description("Optional window in project ticks. Omitted, the window comes from the source's own keyframe spacing.")]
+        long? windowTicks = null)
+        => TextAsync(() => operations.ListCutPointsAsync(projectPath, assetId, atTicks, windowTicks, cancellationToken),
+            MediaJson.Default.CutPoints);
+
     [McpServerTool(Name = "roughcut_preflight_export", ReadOnly = true)]
     [Description("Resolve exact export boundaries and return explicit supported/unsupported stream actions without writing output.")]
     public Task<CallToolResult> PreflightAsync(string projectPath, CancellationToken cancellationToken)
         => TextAsync(() => operations.PreflightAsync(projectPath, cancellationToken), ProjectJson.Default.ExportPlan);
+
+    [McpServerTool(Name = "roughcut_preflight_delivery", ReadOnly = true)]
+    [Description("Report whether the retained timeline can be re-encoded into one portable H.264/AAC MP4, and the frame size, clips and duration it would deliver. Never writes output and never starts the media tools.")]
+    public Task<CallToolResult> PreflightDeliveryAsync(string projectPath, CancellationToken cancellationToken)
+        => TextAsync(() => operations.PreflightDeliveryAsync(projectPath, cancellationToken), ProjectJson.Default.DeliveryPlan);
+
+    [McpServerTool(Name = "roughcut_preflight_mux", ReadOnly = true)]
+    [Description("Report where every cut would land if the timeline were copied rather than re-encoded: the anchor each boundary moves to, how far it moved, the copied length against the requested one, and the worst movement. Copying keeps the source's own packets untouched and is fast, but cuts land on keyframes. Use roughcut_list_cut_points first to see the anchors, and delivery instead when a cut must land exactly.")]
+    public Task<CallToolResult> PreflightMuxAsync(string projectPath, CancellationToken cancellationToken,
+        [Description("mkv, or mp4 where the source codecs allow it.")] string container = "mkv")
+        => TextAsync(() => operations.PreflightMuxAsync(projectPath, container, cancellationToken), MediaJson.Default.MuxPlan);
+
+    [McpServerTool(Name = "roughcut_start_mux")]
+    [Description("Queue one durable job that copies the retained timeline into a new container without re-encoding it. Every retained packet is the source's own; cuts land on the anchors the preflight names. Output must be a new workspace-relative directory.")]
+    public CallToolResult StartMux(string projectPath, string outputDirectory, string container = "mkv")
+        => Run(() => Text(jobs.Start(projectPath, outputDirectory, allowEncoding: false, mode: "mux", container: container)));
+
+    [McpServerTool(Name = "roughcut_start_delivery")]
+    [Description("Queue one durable delivery job that re-encodes the timeline into H.264/AAC MP4. Unlike the strict export this never copies source packets; it claims a faithful edit, not an untouched copy. Output must be a new workspace-relative directory.")]
+    public CallToolResult StartDelivery(string projectPath, string outputDirectory)
+        => Run(() => Text(jobs.Start(projectPath, outputDirectory, allowEncoding: true, mode: "delivery")));
 
     [McpServerTool(Name = "roughcut_start_export")]
     [Description("Queue one bounded, durable export job. Output must be a new workspace-relative directory.")]
@@ -279,6 +352,8 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
     {
         RevisionConflictException => "Project revision conflict; reload the project and retry against its current revision.",
         ExportRejectedException rejected => "Export rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
+        DeliveryRejectedException rejected => "Delivery rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
+        MuxRejectedException rejected => "Copy rejected: " + string.Join("; ", rejected.Plan.Issues.Select(issue => issue.Message)),
         IOException or ArgumentException or JsonException or NotSupportedException or KeyNotFoundException or
         InvalidOperationException or OverflowException or HttpRequestException or TimeoutException => exception.Message,
         OperationCanceledException => "Operation cancelled.",

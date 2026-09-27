@@ -42,13 +42,21 @@ try
                   voice-synthesize <project.json> <expected-revision> <replacement-id>
                   voice-preview <project.json> <expected-revision> <replacement-id> <new-output.wav>
                   voice-state <project.json> <expected-revision> <replacement-id> <applied|reverted>
-                  acquire <url> <new-output-directory> [deno-executable]
-                  create-url <url> <new-output-directory> [deno-executable]
+                  formats <url>
+                  acquire <url> <new-output-directory> [--format <id|highest|medium|lowest>] [deno-executable]
+                  create-url <url> <new-output-directory> [--format <id|highest|medium|lowest>] [deno-executable]
+                  audio-profile <project.json> <asset-id> <from-seconds> <to-seconds> <window-seconds> [band-hz]
+                  cut-points <project.json> <asset-id> <seconds> [window-seconds]
                   preflight <project.json>
                   export <project.json> <new-output-directory> [--allow-encode]
+                  preflight-mux <project.json> [mkv|mp4]
+                  mux <project.json> <new-output-directory> [mkv|mp4]
+                  preflight-delivery <project.json>
+                  deliver <project.json> <new-output-directory>
 
                 Frame requests use source-relative presentation time. JSON metadata goes to stdout.
                 Export is bounded to the documented Matroska video/PCM fixture matrix.
+                Deliver re-encodes any decodable timeline into H.264/AAC MP4; it never claims a copy.
                 Local speech inference requires a separately configured compatible runtime.
                 Executable locations come from ROUGHCUT_FFMPEG / ROUGHCUT_FFPROBE / ROUGHCUT_YTDLP / ROUGHCUT_DENO,
                 then a tools settings file, then PATH. Run `tools` to see what resolves.
@@ -86,12 +94,20 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
-        case ["acquire", var sourceUrl, var destination, .. var acquisitionOptions] when acquisitionOptions.Length <= 1:
+        case ["formats", var sourceUrl, .. var formatOptions] when formatOptions.Length <= 1:
+            {
+                var listed = await new YtDlpAcquirer(new WorkspaceBoundary(Environment.CurrentDirectory), ytDlp)
+                    .ListFormatsAsync(sourceUrl, formatOptions.FirstOrDefault() ?? tools.Deno, token);
+                Console.WriteLine(JsonSerializer.Serialize(listed, ApplicationJson.Default.SourceFormatList));
+                break;
+            }
+        case ["acquire", var sourceUrl, var destination, .. var acquisitionOptions] when acquisitionOptions.Length <= 3:
             {
                 var fullDestination = Path.GetFullPath(destination);
                 var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
                 var result = await new YtDlpAcquirer(boundary, ytDlp).AcquireAsync(sourceUrl,
-                    Path.GetFileName(fullDestination), acquisitionOptions.FirstOrDefault() ?? tools.Deno, token);
+                    Path.GetFileName(fullDestination), Deno(acquisitionOptions) ?? tools.Deno, token,
+                    Option(acquisitionOptions, "--format"));
                 Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.AcquisitionResult));
                 break;
             }
@@ -234,6 +250,31 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(edited, ProjectJson.Default.EditProject));
                 break;
             }
+        case ["audio-profile", var path, var assetId, var fromText, var toText, var windowText, .. var bandOptions]
+            when bandOptions.Length <= 1:
+            {
+                var project = await store.LoadAsync(path, token);
+                long Ticks(string text) => (long)Math.Round(
+                    decimal.Parse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture) *
+                    project.TimeBase.Denominator / project.TimeBase.Numerator, MidpointRounding.AwayFromZero);
+                var profile = await new AudioProfiler(ffmpeg).ProfileAsync(project, path, assetId,
+                    Ticks(fromText), Ticks(toText), Ticks(windowText),
+                    bandOptions.Length == 1 ? int.Parse(bandOptions[0], CultureInfo.InvariantCulture) : AudioProfiler.DefaultBandSplitHz,
+                    token);
+                Console.WriteLine(JsonSerializer.Serialize(profile, MediaJson.Default.AudioProfile));
+                break;
+            }
+        case ["cut-points", var path, var assetId, var secondsText, .. var cutOptions] when cutOptions.Length <= 1:
+            {
+                var project = await store.LoadAsync(path, token);
+                long Ticks(string text) => (long)Math.Round(
+                    decimal.Parse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture) *
+                    project.TimeBase.Denominator / project.TimeBase.Numerator, MidpointRounding.AwayFromZero);
+                var points = await new CutPointReader(ffprobe).ReadAsync(project, path, assetId, Ticks(secondsText),
+                    cutOptions.Length == 1 ? Ticks(cutOptions[0]) : null, token);
+                Console.WriteLine(JsonSerializer.Serialize(points, MediaJson.Default.CutPoints));
+                break;
+            }
         case ["preflight", var path]:
             {
                 var plan = await new ExportPlanner(ffmpeg, ffprobe).PreflightAsync(await store.LoadAsync(path, token), path, token);
@@ -244,6 +285,32 @@ try
             {
                 var report = await new ExportEngine(ffmpeg, ffprobe).ExportAsync(path, destination, options.Length == 1, token);
                 Console.WriteLine(JsonSerializer.Serialize(report, ProjectJson.Default.ExportReport));
+                break;
+            }
+        case ["preflight-mux", var path, .. var muxPlanOptions] when muxPlanOptions.Length <= 1:
+            {
+                var plan = await new MuxExporter(ffmpeg, ffprobe).PlanAsync(await store.LoadAsync(path, token), path,
+                    muxPlanOptions.FirstOrDefault() ?? "mkv", token);
+                Console.WriteLine(JsonSerializer.Serialize(plan, MediaJson.Default.MuxPlan));
+                return plan.Supported ? 0 : 2;
+            }
+        case ["mux", var path, var destination, .. var muxOptions] when muxOptions.Length <= 1:
+            {
+                var report = await new MuxExporter(ffmpeg, ffprobe).ExportAsync(path, destination,
+                    muxOptions.FirstOrDefault() ?? "mkv", token);
+                Console.WriteLine(JsonSerializer.Serialize(report, MediaJson.Default.MuxReport));
+                break;
+            }
+        case ["preflight-delivery", var path]:
+            {
+                var plan = DeliveryExporter.Plan(await store.LoadAsync(path, token), path);
+                Console.WriteLine(JsonSerializer.Serialize(plan, ProjectJson.Default.DeliveryPlan));
+                return plan.Supported ? 0 : 2;
+            }
+        case ["deliver", var path, var destination]:
+            {
+                var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination, token);
+                Console.WriteLine(JsonSerializer.Serialize(report, ProjectJson.Default.DeliveryReport));
                 break;
             }
         case ["inspect", var path]:
@@ -267,13 +334,13 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(project, ProjectJson.Default.EditProject));
                 break;
             }
-        case ["create-url", var sourceUrl, var destination, .. var urlOptions] when urlOptions.Length <= 1:
+        case ["create-url", var sourceUrl, var destination, .. var urlOptions] when urlOptions.Length <= 3:
             {
                 var fullDestination = Path.GetFullPath(destination);
                 var boundary = new WorkspaceBoundary(Path.GetDirectoryName(fullDestination)!);
                 var operations = new RoughCutOperations(boundary, ffmpeg, ffprobe, ytDlp);
                 var result = await operations.CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(fullDestination),
-                    urlOptions.FirstOrDefault() ?? tools.Deno, token: token);
+                    Deno(urlOptions) ?? tools.Deno, token: token, format: Option(urlOptions, "--format"));
                 Console.WriteLine(JsonSerializer.Serialize(result, ApplicationJson.Default.UrlProjectResult));
                 break;
             }
@@ -334,6 +401,16 @@ catch (ExportRejectedException exception)
     Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, ProjectJson.Default.ExportPlan));
     return 2;
 }
+catch (DeliveryRejectedException exception)
+{
+    Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, ProjectJson.Default.DeliveryPlan));
+    return 2;
+}
+catch (MuxRejectedException exception)
+{
+    Console.Error.WriteLine(JsonSerializer.Serialize(exception.Plan, MediaJson.Default.MuxPlan));
+    return 2;
+}
 catch (OperationCanceledException)
 {
     Console.Error.WriteLine("Operation cancelled or media-tool time limit reached.");
@@ -352,4 +429,17 @@ catch (Exception exception) when (exception is IOException or ArgumentException 
         _ => "Operation failed; check arguments, file access, output collisions and media-tool availability."
     });
     return 2;
+}
+
+// Trailing options: a named --format value, and whatever else is left is the Deno path.
+static string? Option(string[] options, string name)
+{
+    var index = Array.IndexOf(options, name);
+    return index >= 0 && index + 1 < options.Length ? options[index + 1] : null;
+}
+
+static string? Deno(string[] options)
+{
+    var format = Option(options, "--format");
+    return options.FirstOrDefault(option => option != "--format" && option != format);
 }
