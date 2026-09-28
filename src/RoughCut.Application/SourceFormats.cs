@@ -82,6 +82,19 @@ public static partial class SourceFormatPolicy
             chosen.Bytes, chosen.Bitrate, reason);
     }
 
+    /// The request to make for one rendition a person picked from a list: unchanged where it already
+    /// carries sound or already names a pair, and joined to the source's best audio where it does not.
+    /// Returns the identifier untouched when the source offers no audio at all, so the caller still gets the
+    /// refusal that explains why rather than a request that silently means something else.
+    public static string WithAudio(SourceFormatList list, string formatId)
+    {
+        if (formatId.Contains('+', StringComparison.Ordinal)) return formatId;
+        var picture = list.Formats.FirstOrDefault(format => format.Id == formatId);
+        if (picture is null || picture.Kind != "video") return formatId;
+        var audio = list.Formats.Where(format => format.Kind == "audio").OrderBy(Weight).FirstOrDefault();
+        return audio is null ? formatId : formatId + "+" + audio.Id;
+    }
+
     private static FormatChoice ByIdentifier(SourceFormatList list, string request, long maxBytes)
     {
         if (!FormatIdPattern().IsMatch(request))

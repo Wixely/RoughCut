@@ -23,6 +23,7 @@ try
                   (no arguments)                                  open the window and pick a project
                   review [project.json] [pre-rendered.webm]       open a project directly
                   snapshot [project.json] <new-output.png>        render the window headlessly
+                  snapshot --url <url> <new-output.png>           render the rendition picker for a real URL
                   probe-playback <project.json> <seconds>         measure decoded playback drift
                 """);
             return 0;
@@ -32,6 +33,12 @@ try
             return RunWindow(await DesktopReviewSession.LoadAsync(projectPath), reviewOptions.FirstOrDefault());
         case ["snapshot", var launcherOutput]:
             return Snapshot(launcherOutput, null);
+        case ["snapshot", "--url", var sourceUrl, var pickerOutput]:
+            {
+                // Asks the real source what it offers, then renders the picker holding that answer.
+                var offered = await DesktopReviewSession.ListFormatsAsync(sourceUrl);
+                return Snapshot(pickerOutput, null, app => app.OfferFormats(sourceUrl, offered));
+            }
         case ["snapshot", var projectPath, var outputPath]:
             {
                 var session = await DesktopReviewSession.LoadAsync(projectPath);
@@ -76,12 +83,13 @@ static void ReportCrash(Exception? exception, string origin)
     }
 }
 
-static int Snapshot(string outputPath, DesktopReviewSession? session)
+static int Snapshot(string outputPath, DesktopReviewSession? session, Action<RoughCutReviewApp>? arrange = null)
 {
     outputPath = Path.GetFullPath(outputPath);
     if (File.Exists(outputPath)) throw new IOException("Snapshot output already exists.");
     var app = new RoughCutReviewApp(session);
     using var document = app.CreateDocument();
+    arrange?.Invoke(app);
     // The view measures itself from a laid-out document — the cropped playback box among other things — so
     // the snapshot lays out, presents once and only then renders what the window would show.
     document.BuildDisplayList(1280, 800);

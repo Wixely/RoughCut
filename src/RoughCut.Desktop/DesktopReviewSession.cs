@@ -48,16 +48,33 @@ public sealed class DesktopReviewSession
     private static RoughCutOperations Operations(string directory) =>
         new(new WorkspaceBoundary(directory), Tools.Ffmpeg, Tools.Ffprobe, Tools.YtDlp);
 
-    /// Downloads one URL with its subtitles through the bounded yt-dlp policy, then creates and opens a
-    /// project for it. Each acquisition gets its own dated folder under the projects root.
-    public static async Task<DesktopReviewSession> CreateFromUrlAsync(string sourceUrl, CancellationToken token = default)
+    /// What the source offers, without downloading any of it, so a person can pick a quality themselves
+    /// rather than accepting whatever a policy would have chosen.
+    public static Task<SourceFormatList> ListFormatsAsync(string sourceUrl, CancellationToken token = default)
     {
         var root = ProjectsRoot;
         Directory.CreateDirectory(root);
-        var destination = UnusedDirectory(root, DateTime.Now.ToString("yyyy-MM-dd-HHmmss",
-            System.Globalization.CultureInfo.InvariantCulture));
+        return new YtDlpAcquirer(new WorkspaceBoundary(root), Tools.YtDlp).ListFormatsAsync(sourceUrl, Tools.Deno, token);
+    }
+
+    /// Downloads one URL with its subtitles through the bounded yt-dlp policy, then creates and opens a
+    /// project for it. Everything lands in one folder: the media, the project file and its assets.
+    ///
+    /// `format` is a rendition identifier or a bitrate policy; `folder` is where the edit should live, and
+    /// when it is absent a folder is generated from the video's own title under the projects root.
+    public static async Task<DesktopReviewSession> CreateFromUrlAsync(string sourceUrl,
+        CancellationToken token = default, string? format = null, string? folder = null, string? title = null,
+        IProgress<double>? progress = null)
+    {
+        var destination = folder is { Length: > 0 }
+            ? Path.GetFullPath(folder)
+            : ProjectFolder.Unused(ProjectsRoot, ProjectFolder.NameFrom(title, DateTime.Now.ToString(
+                "yyyy-MM-dd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)));
+        var root = Path.GetDirectoryName(destination)
+            ?? throw new ArgumentException("An edit folder must sit inside a containing directory.");
+        Directory.CreateDirectory(root);
         var result = await Operations(root).CreateProjectFromUrlAsync(sourceUrl, Path.GetFileName(destination),
-            Tools.Deno, token: token);
+            Tools.Deno, token: token, format: format, progress: progress);
         return await LoadAsync(result.ProjectPath, token);
     }
 
@@ -70,6 +87,49 @@ public sealed class DesktopReviewSession
             if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
         }
         throw new IOException("Too many acquisitions already exist for that moment.");
+    }
+
+    /// Creates an edit in a folder of its own from a local video: the video is copied in beside the project
+    /// file, so one directory holds the whole edit and its stored paths stay portable. The person's own file
+    /// is left exactly where it was.
+    ///
+    /// When `folder` is absent the folder is named after the video, under the projects root.
+    public static async Task<DesktopReviewSession> CreateInFolderAsync(string mediaPath,
+        CancellationToken token = default, string? folder = null, IProgress<double>? progress = null)
+    {
+        mediaPath = Path.GetFullPath(mediaPath);
+        if (!File.Exists(mediaPath)) throw new FileNotFoundException("The chosen video does not exist.", mediaPath);
+        var destination = folder is { Length: > 0 }
+            ? Path.GetFullPath(folder)
+            : ProjectFolder.Unused(ProjectsRoot, Path.GetFileNameWithoutExtension(mediaPath));
+        var root = Path.GetDirectoryName(destination)
+            ?? throw new ArgumentException("An edit folder must sit inside a containing directory.");
+        Directory.CreateDirectory(root);
+        // The workspace has to contain both the video and the new folder, so it is rooted at whichever
+        // directory holds them both rather than at either one of them.
+        var shared = CommonRoot(Path.GetDirectoryName(mediaPath)!, root);
+        var operations = Operations(shared);
+        var result = await operations.CreateProjectFolderAsync(
+            Path.GetRelativePath(shared, mediaPath).Replace('\\', '/'),
+            Path.GetRelativePath(shared, destination).Replace('\\', '/'), progress, token);
+        return await LoadAsync(result.ProjectPath, token);
+    }
+
+    /// The deepest directory containing both paths, so a workspace can reach the person's video and the new
+    /// edit folder without either being reachable through "..".
+    private static string CommonRoot(string first, string second)
+    {
+        var left = Path.GetFullPath(first).TrimEnd(Path.DirectorySeparatorChar);
+        var right = Path.GetFullPath(second).TrimEnd(Path.DirectorySeparatorChar);
+        while (!right.StartsWith(left + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            var parent = Path.GetDirectoryName(left);
+            if (string.IsNullOrEmpty(parent))
+                throw new ArgumentException("The video and the edit folder are on different drives; choose a folder on the same drive.");
+            left = parent.TrimEnd(Path.DirectorySeparatorChar);
+        }
+        return left;
     }
 
     /// Creates a project beside its video, because an asset must live inside the project directory
@@ -206,8 +266,85 @@ public sealed class DesktopReviewSession
     private string PreviewStatus() => PlaybackCopy is null ? "No preview copy is available" :
         $"Approximated timeline over a preview copy · {PlaybackCopy.Length / 1024d / 1024d:0.0} MiB";
 
-    public string DeliveryStatus { get; private set; } = "Export writes an MP4 beside the project";
+    public string DeliveryStatus { get; private set; } = "Export writes a new folder beside the project";
     public string? DeliveredPath { get; private set; }
+
+    /// What this project can be exported as. The copy options come first and are the default: keeping the
+    /// source's own packets is what a cut-down usually wants, and it finishes in seconds.
+    public Task<ExportFormatList> ListExportFormatsAsync(CancellationToken token = default) =>
+        Operations(Path.GetDirectoryName(ProjectPath)!).ListExportFormatsAsync(Path.GetFileName(ProjectPath), token);
+
+    /// Exports the saved timeline into a new folder beside the project, in the format the person chose. A
+    /// copy keeps the source's packets and moves each cut to the nearest anchor behind it; a delivery format
+    /// re-encodes and lands the cuts exactly. Either way the project itself is never changed by exporting it.
+    public async Task<string> ExportAsync(string formatName, IProgress<double>? progress = null,
+        CancellationToken token = default)
+    {
+        var copy = formatName.StartsWith("original-", StringComparison.Ordinal);
+        var container = formatName == "original-mp4" ? "mp4" : "mkv";
+        var target = copy ? null : DeliveryTarget.Parse(formatName);
+        var destination = UnusedDirectory(Path.GetDirectoryName(ProjectPath)!,
+            Path.GetFileNameWithoutExtension(ProjectPath) + "-export");
+        DeliveryStatus = copy
+            ? $"Copying the timeline into {container.ToUpperInvariant()} from revision {Project.Revision}…"
+            : FormattableString.Invariant($"Exporting {target!.Label} from revision {Project.Revision}…");
+        try
+        {
+            string published;
+            double seconds;
+            long bytes;
+            if (copy)
+            {
+                var report = await new MuxExporter(Tools.Ffmpeg, Tools.Ffprobe)
+                    .ExportAsync(ProjectPath, destination, container, token, progress);
+                published = Path.Combine(destination, "video." + container);
+                seconds = report.ActualSeconds;
+                bytes = report.OutputBytes;
+                // A copy cannot land every cut where it was asked for, so the window says so rather than
+                // implying the boundaries are exact.
+                DeliveryStatus = FormattableString.Invariant(
+                        $"Copied {Path.GetFileName(destination)} · {bytes / 1024d / 1024d:0.0} MiB · {seconds:0.0}s · ") +
+                    FormattableString.Invariant(
+                        $"cuts moved by up to {Seconds(report.Plan.WorstOffsetTicks):0.000}s to reach a keyframe");
+            }
+            else
+            {
+                var report = await new DeliveryExporter(Tools.Ffmpeg, Tools.Ffprobe)
+                    .ExportAsync(ProjectPath, destination, token, target, progress);
+                published = Path.Combine(destination, target!.FileName);
+                seconds = report.ActualSeconds;
+                bytes = report.OutputBytes;
+                DeliveryStatus = $"Exported {Path.Combine(Path.GetFileName(destination), target.FileName)} · " +
+                    FormattableString.Invariant(
+                        $"{bytes / 1024d / 1024d:0.0} MiB · {seconds:0.0}s from revision {report.Plan.Revision}");
+            }
+            DeliveredPath = published;
+            return published;
+        }
+        catch (OperationCanceledException)
+        {
+            DeliveryStatus = "Export canceled; nothing was published.";
+            throw;
+        }
+        catch (DeliveryRejectedException rejected)
+        {
+            DeliveryStatus = string.Join(" ", rejected.Plan.Issues.Select(issue => issue.Message));
+            throw;
+        }
+        catch (MuxRejectedException rejected)
+        {
+            DeliveryStatus = string.Join(" ", rejected.Plan.Issues.Select(issue => issue.Message));
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException or InvalidDataException or
+            InvalidOperationException or KeyNotFoundException or ProjectValidationException or MediaToolException)
+        {
+            DeliveryStatus = exception.Message;
+            throw;
+        }
+    }
+
+    private double Seconds(long ticks) => (double)ticks * Project.TimeBase.Numerator / Project.TimeBase.Denominator;
 
     /// Renders the saved timeline to a deliverable H.264/AAC MP4 in a new folder beside the project. This is
     /// the only file the window produces for somebody else to watch, and it is always an explicit action.

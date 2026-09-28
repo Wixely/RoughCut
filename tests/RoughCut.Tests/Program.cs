@@ -254,6 +254,50 @@ await Check("Caption selection records quality provenance and allows explicit ov
         "Explicit caption override was not persisted.");
     await Throws<RevisionConflictException>(() => operations.SelectCaptionsAsync("caption-selection.json", "video", candidates, 2, "en"));
 });
+await Check("An edit folder is named from the video and copied into safely", async () =>
+{
+    Assert(ProjectFolder.NameFrom("Fixture: Part 2 <HD> | 4K?") == "Fixture Part 2 HD 4K" &&
+        ProjectFolder.NameFrom("  trailing dots... ") == "trailing dots" &&
+        ProjectFolder.NameFrom("") == "project" && ProjectFolder.NameFrom("///") == "project" &&
+        ProjectFolder.NameFrom("nul") == "nul-project" &&
+        ProjectFolder.NameFrom(new string('x', 200)).Length == 80,
+        "An edit folder name is not reduced to something a filesystem accepts.");
+
+    var folderRoot = Path.Combine(testRoot, "folder-naming");
+    Directory.CreateDirectory(Path.Combine(folderRoot, "Fixture title"));
+    Assert(Path.GetFileName(ProjectFolder.Unused(folderRoot, "Fixture title")) == "Fixture title-2",
+        "A second edit of the same video would have overwritten the first.");
+    await Throws<IOException>(() => Task.FromResult(ProjectFolder.Unused(folderRoot, "Fixture title", limit: 1)));
+
+    var copySource = Path.Combine(folderRoot, "source.bin");
+    var bytes = new byte[3 * 1024 * 1024 + 7];
+    Random.Shared.NextBytes(bytes);
+    await File.WriteAllBytesAsync(copySource, bytes);
+    var fractions = new List<double>();
+    var copied = Path.Combine(folderRoot, "copied", "source.bin");
+    await ProjectFolder.CopyAsync(copySource, copied, new Progress<double>(value => { lock (fractions) fractions.Add(value); }));
+    Assert((await File.ReadAllBytesAsync(copied)).SequenceEqual(bytes), "The copy is not the file it copied.");
+    for (var wait = 0; wait < 100; wait++)
+    {
+        lock (fractions) if (fractions.Count > 2 && Math.Abs(fractions[^1] - 1) < 1e-9) break;
+        await Task.Delay(20);
+    }
+    lock (fractions)
+        Assert(fractions.Count > 2 && fractions[0] < 0.5 && Math.Abs(fractions[^1] - 1) < 1e-9 &&
+            fractions.Zip(fractions.Skip(1)).All(pair => pair.Second >= pair.First),
+            $"Copy progress did not rise from nothing to complete: [{string.Join(", ", fractions)}].");
+    await Throws<IOException>(() => ProjectFolder.CopyAsync(copySource, copied));
+    // A cancelled copy leaves neither a whole file nor a fragment that could be mistaken for one.
+    var abandoned = Path.Combine(folderRoot, "abandoned.bin");
+    using (var cancellation = new CancellationTokenSource())
+    {
+        await Throws<OperationCanceledException>(() => ProjectFolder.CopyAsync(copySource, abandoned,
+            new Progress<double>(_ => cancellation.Cancel()), cancellation.Token));
+    }
+    Assert(!File.Exists(abandoned) && !File.Exists(abandoned + ".partial"),
+        "A cancelled copy left a file behind.");
+});
+
 await Check("The caller chooses a rendition by identifier or by bitrate policy", () =>
 {
     SourceFormat Video(string id, int height, double kbps, long bytes) =>
@@ -307,13 +351,41 @@ await Check("Acquisition lists renditions, requests the chosen one and refuses a
         listed.MaxBytes == YtDlpAcquirer.MaxDownloadBytes && listed.DurationSeconds == 600,
         "Listing did not describe the renditions a caller chooses between.");
 
+    // Listing offers picture-only renditions, so choosing one has to carry sound: the window says the sound
+    // comes from the best audio, and this is what makes that true. An API caller still gets the refusal.
+    Assert(SourceFormatPolicy.WithAudio(listed, "137") == "137+251" &&
+        SourceFormatPolicy.WithAudio(listed, "137+251") == "137+251" &&
+        SourceFormatPolicy.WithAudio(listed, "251") == "251" &&
+        SourceFormatPolicy.WithAudio(listed, "absent") == "absent",
+        "Pairing a picture-only rendition with the source's best audio is wrong.");
+    Assert(Caught<ArgumentException>(() => SourceFormatPolicy.Choose(listed, "137", YtDlpAcquirer.MaxDownloadBytes))
+        .Message.Contains("carries no audio", StringComparison.Ordinal),
+        "An unpaired picture-only request no longer explains itself.");
+
     var chosen = new TestAcquisitionTool();
+    // A download takes minutes, so a caller can follow it. The fractions are read from the tool's own
+    // progress lines, which is why the fixture emits them in the shape the real tool writes.
+    var reported = new List<double>();
     var result = await new YtDlpAcquirer(workspace, "fake-yt-dlp", chosen)
-        .AcquireAsync("https://example.test/choose", "acquired-chosen", format: "lowest");
+        .AcquireAsync("https://example.test/choose", "acquired-chosen", format: "lowest",
+            progress: new Progress<double>(fraction => { lock (reported) reported.Add(fraction); }));
     var arguments = chosen.DownloadArguments!;
     Assert(arguments.Contains("--format") && arguments[arguments.IndexOf("--format") + 1] == "160+251" &&
         result.Format is { Request: "lowest", Expression: "160+251" },
         "The acquisition did not request the chosen rendition, or did not record the choice.");
+    Assert(arguments.Contains("--progress") && !arguments.Contains("--no-progress") &&
+        arguments[arguments.IndexOf("--progress-template") + 1] == YtDlpAcquirer.ProgressTemplate,
+        "The acquisition did not ask for machine-readable progress.");
+    // Progress is delivered asynchronously, so the assertion waits for it rather than racing it.
+    for (var wait = 0; wait < 100; wait++)
+    {
+        lock (reported) if (reported.Count >= 3) break;
+        await Task.Delay(20);
+    }
+    lock (reported)
+        Assert(reported.Count >= 3 && Math.Abs(reported[0]) < 1e-9 && Math.Abs(reported[1] - 0.475) < 1e-9 &&
+            Math.Abs(reported[^1] - 1) < 1e-9,
+            $"Download progress did not reach the caller: [{string.Join(", ", reported)}].");
 
     // The two failures a real 4K source produced, now named rather than surfacing as a LINQ message.
     var partial = new TestAcquisitionTool { LeavePartialFile = true };
@@ -644,6 +716,29 @@ if (args.Contains("--media", StringComparer.Ordinal))
             ["-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=10:duration=2",
              "-c:v", "libx264", "-qp", "0", "-g", "20", "-threads", "1", "-an", "-y", source]);
     });
+    await Check("Reading a source's shape agrees with indexing it, without walking its frames", async () =>
+    {
+        // Creating a project used to index every frame of its source: on a fourteen-minute 1080p60 download
+        // that took two minutes and seventeen seconds, which a person saw as a window frozen at 100%. The
+        // container is asked instead, and has to give the same answer.
+        var indexed = await reader.InspectAsync(source);
+        var probed = await reader.ProbeAsync(source);
+        Assert(probed.Sha256 == indexed.Sha256 && probed.Codec == indexed.Codec &&
+            probed.Width == indexed.Width && probed.Height == indexed.Height &&
+            probed.TimeBase.Numerator == indexed.TimeBase.Numerator &&
+            probed.TimeBase.Denominator == indexed.TimeBase.Denominator &&
+            probed.StartTicks == indexed.StartTicks,
+            "Reading a source's shape disagrees with indexing it.");
+        // A container states its length to its own precision, so the two may differ by a frame; they may not
+        // differ by more, because this is the length every clip is created against.
+        var frame = indexed.DurationTicks / Math.Max(1, indexed.FrameCount);
+        Assert(Math.Abs(probed.DurationTicks - indexed.DurationTicks) <= frame,
+            $"Probed duration {probed.DurationTicks} differs from indexed {indexed.DurationTicks} by more than a frame.");
+        // Frames are not counted, and the record says so rather than reporting a made-up number.
+        Assert(probed.FrameCount == 0 && indexed.FrameCount > 0, "The probe invented a frame count.");
+        await Throws<FileNotFoundException>(() => reader.ProbeAsync(Path.Combine(testRoot, "absent.mkv")));
+    });
+
     await Check("Analysis persistence verifies source evidence and applies conservative decisions", async () =>
     {
         var info = await reader.InspectAsync(source);
@@ -960,11 +1055,17 @@ sealed class TestAcquisitionTool(string? mediaFixture = null) : IAcquisitionTool
           {"format_id":"sb0","ext":"mhtml","vcodec":"none","acodec":"none","height":90}]}
         """;
 
-    public async Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public async Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken, Action<string>? onOutputLine = null)
     {
         if (arguments.Contains("--version")) return new("2026.09.01\n"u8.ToArray(), "");
         if (arguments.Contains("--dump-single-json")) return new(System.Text.Encoding.UTF8.GetBytes(FormatsJson), "");
         DownloadArguments = arguments;
+        // Shaped exactly like the lines the real tool writes for the template RoughCut asks for, so the
+        // parser a caller's progress bar depends on is exercised here rather than only in production.
+        var template = arguments[arguments.IndexOf("--progress-template") + 1];
+        foreach (var percent in (string[])["  0.0%", " 47.5%", "100.0%"])
+            onOutputLine?.Invoke(template.Replace("download:", "").Replace("%(progress._percent_str)s", percent));
         var index = arguments.IndexOf("--paths");
         var staging = arguments[index + 1];
         if (mediaFixture is not null) File.Copy(mediaFixture, Path.Combine(staging, "source.mkv"));

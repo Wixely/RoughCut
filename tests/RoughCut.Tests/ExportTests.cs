@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using RoughCut.Application;
 using RoughCut.Core;
 using RoughCut.Media;
 
@@ -570,6 +571,56 @@ internal static class ExportTests
             Assert(!Directory.Exists(Path.Combine(root, "delivery changed result")) &&
                 !Directory.EnumerateDirectories(root, ".roughcut-delivery-*").Any(), "A rejected delivery left a published or staged output.");
         });
+        await check("Every offered export format is produced, probed and named", async () =>
+        {
+            var deliverySource = Path.Combine(root, "delivery source.mp4");
+            var asset = new MediaAsset("source-1", "video", "delivery source.mp4",
+                await MediaReader.FingerprintAsync(deliverySource), 4000, 160, 96, "video/mp4");
+            var formatProject = new EditProject
+            {
+                ProjectId = "delivery-formats",
+                TimeBase = new(1, 1000),
+                Assets = [asset],
+                Timeline = [new("clip-1", "source-1", 1000, 2000)]
+            };
+            var path = Path.Combine(root, "delivery-formats-project.json");
+            await store.SaveAsync(path, formatProject, 0);
+
+            // What a caller may offer comes from RoughCut, so a menu cannot drift from the exporters. Copies
+            // come first and name the source's own codec; MP4 is offered because H.264 belongs in one.
+            var formats = await new RoughCutOperations(new WorkspaceBoundary(root), ffmpeg, ffprobe)
+                .ListExportFormatsAsync("delivery-formats-project.json");
+            Assert(formats.Options[0] is { Name: "original-mkv", Copy: true, Extension: ".mkv" } &&
+                formats.Options[0].Label.Contains("h264", StringComparison.Ordinal) &&
+                formats.Options[1] is { Name: "original-mp4", Copy: true } &&
+                formats.Options.Count(option => !option.Copy) == DeliveryTarget.All.Count,
+                "The offered export formats are wrong or in the wrong order.");
+            Assert(DeliveryTarget.Parse(null) == DeliveryTarget.Mp4 && DeliveryTarget.Parse(".webm") == DeliveryTarget.WebM,
+                "Delivery target parsing does not accept the names it publishes.");
+            await Throws<ArgumentOutOfRangeException>(() => Task.FromResult(DeliveryTarget.Parse("avi")));
+
+            // Each encoded target is produced and probed, because a target claims codecs it must then carry.
+            foreach (var target in DeliveryTarget.All)
+            {
+                var destination = Path.Combine(root, "delivery format " + target.Name);
+                var plan = DeliveryExporter.Plan(formatProject, path, target);
+                Assert(plan is { Supported: true } && plan.Container == target.Container &&
+                    plan.VideoCodec == target.VideoCodec && plan.AudioCodec == target.AudioCodec,
+                    $"The {target.Name} plan does not describe the target it was given.");
+                var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination, default, target);
+                var output = Path.Combine(destination, target.FileName);
+                Assert(File.Exists(output) && report.Plan.Container == target.Container,
+                    $"The {target.Name} bundle does not hold {target.FileName}.");
+                var probe = await ToolProcess.RunAsync(ffprobe, ["-v", "error", "-show_entries",
+                    "stream=codec_name:format=format_name", "-of", "csv=p=0", "-i", output]);
+                var reported = Encoding.UTF8.GetString(probe.Output).Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                Assert(reported.Contains(target.VideoCodec) && reported.Contains(target.AudioCodec),
+                    $"The {target.Name} file does not carry the codecs it promised: {string.Join(" ", reported)}.");
+                Assert(Math.Abs(report.ActualSeconds - 1) <= 0.3,
+                    $"The {target.Name} file is {report.ActualSeconds:0.000}s rather than the second the timeline claims.");
+            }
+        });
+
         await check("Delivery crops, silences and refuses what it cannot render faithfully", async () =>
         {
             var deliverySource = Path.Combine(root, "delivery source.mp4");

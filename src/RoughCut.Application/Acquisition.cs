@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using RoughCut.Core;
 using RoughCut.Media;
 
@@ -13,23 +14,44 @@ public sealed record AcquisitionResult(int SchemaVersion, string Source, string 
 
 public interface IAcquisitionTool
 {
-    Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken);
+    /// `onOutputLine` sees each line the tool writes as it writes it, so a caller can follow a download
+    /// that takes minutes. It is optional: an implementation that cannot stream simply ignores it.
+    Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken, Action<string>? onOutputLine = null);
 }
 
 public sealed class AcquisitionTool : IAcquisitionTool
 {
-    public Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    public Task<ToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken, Action<string>? onOutputLine = null)
         => ToolProcess.RunAsync(executable, arguments, outputLimit: 1024 * 1024,
-            timeout: TimeSpan.FromMinutes(15), cancellationToken: cancellationToken);
+            timeout: TimeSpan.FromMinutes(15), cancellationToken: cancellationToken, onOutputLine: onOutputLine);
 }
 
-public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable = "yt-dlp", IAcquisitionTool? tool = null)
+public sealed partial class YtDlpAcquirer(WorkspaceBoundary workspace, string executable = "yt-dlp", IAcquisitionTool? tool = null)
 {
     private const long MaxAggregateBytes = 600L * 1024 * 1024;
     /// What one download may fetch. Selection is held to this before anything starts, so the size bound
     /// refuses a rendition rather than aborting a download that has already written most of a file.
     public const long MaxDownloadBytes = 512L * 1024 * 1024;
     private readonly IAcquisitionTool _tool = tool ?? new AcquisitionTool();
+
+    /// One line per progress update, prefixed so it cannot be confused with anything else yt-dlp writes.
+    /// A download of separate video and audio renditions runs this to 100% once per stream, and the merge
+    /// that follows reports nothing, so a caller should treat the number as "how far through the current
+    /// file" rather than "how far through the job".
+    public const string ProgressTemplate = "download:roughcut-progress %(progress._percent_str)s";
+
+    [GeneratedRegex(@"roughcut-progress\s+([0-9]+(\.[0-9]+)?)%")]
+    private static partial Regex ProgressPattern();
+
+    private static void Report(string line, IProgress<double> progress)
+    {
+        var match = ProgressPattern().Match(line);
+        if (match.Success && double.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var percent))
+            progress.Report(Math.Clamp(percent / 100, 0, 1));
+    }
 
     /// What the source offers, without downloading any of it. The caller picks from this, by identifier or
     /// by one of the named policies.
@@ -99,7 +121,8 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
     /// `format` is a format identifier from ListFormatsAsync, two joined by '+', or one of the named
     /// policies. It defaults to the middle rendition rather than the largest.
     public async Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
-        string? denoPath = null, CancellationToken cancellationToken = default, string? format = null)
+        string? denoPath = null, CancellationToken cancellationToken = default, string? format = null,
+        IProgress<double>? progress = null)
     {
         var uri = ValidatedSource(sourceUrl);
         var destination = workspace.Resolve(destinationDirectory, mustExist: false);
@@ -117,7 +140,8 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
         try
         {
             var arguments = BuildArguments(uri, staging, denoPath, choice.Expression);
-            await _tool.RunAsync(executable, arguments, cancellationToken);
+            await _tool.RunAsync(executable, arguments, cancellationToken,
+                progress is null ? null : line => Report(line, progress));
             cancellationToken.ThrowIfCancellationRequested();
             var version = System.Text.Encoding.UTF8.GetString((await _tool.RunAsync(executable, ["--ignore-config", "--version"], cancellationToken)).Output).Trim();
             var result = await InspectAsync(uri, staging, version, cancellationToken) with { Format = choice };
@@ -138,7 +162,7 @@ public sealed class YtDlpAcquirer(WorkspaceBoundary workspace, string executable
         var arguments = new List<string>
         {
             "--ignore-config", "--no-remote-components", "--no-playlist", "--max-filesize", "536870912",
-            "--no-overwrites", "--no-progress", "--newline", "--write-info-json", "--write-subs", "--write-auto-subs",
+            "--no-overwrites", "--newline", "--progress", "--progress-template", ProgressTemplate, "--write-info-json", "--write-subs", "--write-auto-subs",
             "--sub-langs", "en,-live_chat", "--sub-format", "srt/best", "--convert-subs", "srt",
             "--merge-output-format", "mkv", "--remux-video", "mkv", "--paths", staging,
             "--output", "source.%(ext)s", "--format", formatExpression

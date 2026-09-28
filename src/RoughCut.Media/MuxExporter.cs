@@ -111,7 +111,7 @@ public sealed class MuxExporter(string ffmpeg = "ffmpeg", string ffprobe = "ffpr
     }
 
     public async Task<MuxReport> ExportAsync(string projectPath, string outputDirectory, string container = "mkv",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IProgress<double>? progress = null)
     {
         projectPath = Path.GetFullPath(projectPath);
         outputDirectory = Path.GetFullPath(outputDirectory);
@@ -148,16 +148,20 @@ public sealed class MuxExporter(string ffmpeg = "ffmpeg", string ffprobe = "ffpr
             var output = Path.Combine(staging, "video." + container);
             // Warnings are read rather than suppressed: a join legitimately produces non-monotonic audio
             // timestamps, and anything else the muxer says about a copy is a failure.
-            var arguments = new List<string> { "-v", "warning", "-nostdin", "-n",
-                "-protocol_whitelist", "file", "-format_whitelist", "concat,matroska,webm,mov,mp4",
-                "-f", "concat", "-safe", "1", "-i", listPath, "-map", "0:v:0" };
+            var arguments = new List<string> { "-v", "warning", "-nostdin", "-n" };
+            // Progress goes to standard output, which a copy does not otherwise use.
+            if (progress is not null) arguments.AddRange(EncodeProgress.Arguments);
+            arguments.AddRange(["-protocol_whitelist", "file", "-format_whitelist", "concat,matroska,webm,mov,mp4",
+                "-f", "concat", "-safe", "1", "-i", listPath, "-map", "0:v:0"]);
             if (plan.AudioCodec != "none") arguments.AddRange(["-map", "0:a:0"]);
             arguments.AddRange(["-c", "copy", "-avoid_negative_ts", "make_zero",
                 "-map_metadata", "-1", "-map_chapters", "-1",
                 "-fs", MaxOutputBytes.ToString(CultureInfo.InvariantCulture),
                 "-f", container == "mp4" ? "mp4" : "matroska", output]);
+            var planned = Seconds(plan.CopiedDuration, project.TimeBase);
             var run = await ToolProcess.RunAsync(ffmpeg, arguments, timeout: TimeSpan.FromMinutes(60),
-                allowDiagnostics: true, cancellationToken: cancellationToken);
+                allowDiagnostics: true, cancellationToken: cancellationToken,
+                onOutputLine: progress is null ? null : line => EncodeProgress.Report(line, planned, progress));
             var adjustments = 0;
             foreach (var line in run.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {

@@ -20,6 +20,32 @@ public static class NativeFileDialog
     private const int OfnPathMustExist = 0x00000800;
     private const int OfnFileMustExist = 0x00001000;
     private const int OfnExplorer = 0x00080000;
+    private const uint BifReturnOnlyFileSystemDirectories = 0x00000001;
+    private const uint BifNewDialogStyle = 0x00000040;
+    private const uint BifEditBox = 0x00000010;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct BrowseInfo
+    {
+        public nint Owner;
+        public nint Root;
+        public nint DisplayName;
+        public nint Title;
+        public uint Flags;
+        public nint Callback;
+        public nint Parameter;
+        public int Image;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint SHBrowseForFolderW(ref BrowseInfo info);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SHGetPathFromIDListW(nint identifier, nint path);
+
+    [DllImport("ole32.dll")]
+    private static extern void CoTaskMemFree(nint memory);
 
     private static string? _linuxPicker;
     private static bool _linuxProbed;
@@ -37,6 +63,98 @@ public static class NativeFileDialog
         if (OperatingSystem.IsWindows()) return OpenWindows(title, filter, initialDirectory, owner);
         if (LinuxPicker() is { } picker) return OpenLinux(picker, title, filter, initialDirectory);
         return null;
+    }
+
+    /// Blocks until the person chooses a directory or cancels, so call it off the UI thread. Returns null
+    /// when the dialog is cancelled or no picker is available. An edit lives in a folder, so choosing where
+    /// it goes has to be possible without typing a path.
+    public static string? OpenFolder(string title, string? initialDirectory, nint owner)
+    {
+        if (OperatingSystem.IsWindows()) return FolderWindows(title, initialDirectory, owner);
+        if (LinuxPicker() is { } picker) return FolderLinux(picker, title, initialDirectory);
+        return null;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string? FolderWindows(string title, string? initialDirectory, nint owner)
+    {
+        // Same apartment requirement as the file dialog: the shell's folder browser loads extensions.
+        string? selected = null;
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { selected = ShowWindowsFolderDialog(title, initialDirectory, owner); }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null) throw failure;
+        return selected;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string? ShowWindowsFolderDialog(string title, string? initialDirectory, nint owner)
+    {
+        var titlePtr = Marshal.StringToHGlobalUni(title);
+        var buffer = Marshal.AllocHGlobal(MaxPathChars * 2);
+        var identifier = nint.Zero;
+        try
+        {
+            var info = new BrowseInfo
+            {
+                Owner = owner,
+                Title = titlePtr,
+                // A modern folder browser with an editable path and a resizable window, rather than the
+                // cramped 1995 tree the default flags give.
+                Flags = BifReturnOnlyFileSystemDirectories | BifNewDialogStyle | BifEditBox,
+            };
+            identifier = SHBrowseForFolderW(ref info);
+            if (identifier == nint.Zero) return null;
+            if (!SHGetPathFromIDListW(identifier, buffer)) return null;
+            var chosen = Marshal.PtrToStringUni(buffer);
+            if (string.IsNullOrWhiteSpace(chosen)) return null;
+            // The browser returns an existing directory; a new edit folder is created inside it by the
+            // caller, which is what the initial directory is for.
+            return chosen;
+        }
+        finally
+        {
+            if (identifier != nint.Zero) CoTaskMemFree(identifier);
+            Marshal.FreeHGlobal(buffer);
+            Marshal.FreeHGlobal(titlePtr);
+        }
+    }
+
+    private static string? FolderLinux(string picker, string title, string? initialDirectory)
+    {
+        var start = new ProcessStartInfo(picker) { RedirectStandardOutput = true, UseShellExecute = false };
+        if (picker.EndsWith("zenity", StringComparison.Ordinal))
+        {
+            start.ArgumentList.Add("--file-selection");
+            start.ArgumentList.Add("--directory");
+            start.ArgumentList.Add("--title=" + title);
+            if (!string.IsNullOrWhiteSpace(initialDirectory))
+                start.ArgumentList.Add("--filename=" + initialDirectory + Path.DirectorySeparatorChar);
+        }
+        else
+        {
+            start.ArgumentList.Add("--getexistingdirectory");
+            start.ArgumentList.Add(string.IsNullOrWhiteSpace(initialDirectory) ? "." : initialDirectory);
+        }
+        try
+        {
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("The folder picker did not start.");
+            var output = process.StandardOutput.ReadToEnd();
+            if (!process.WaitForExit(TimeSpan.FromMinutes(10))) process.Kill(entireProcessTree: true);
+            var selected = output.Trim();
+            return process.ExitCode == 0 && selected.Length > 0 ? selected : null;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or
+            System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     [SupportedOSPlatform("windows")]

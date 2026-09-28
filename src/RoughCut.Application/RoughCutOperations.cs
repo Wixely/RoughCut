@@ -8,6 +8,9 @@ namespace RoughCut.Application;
 public sealed record UrlProjectResult(string ProjectPath, AcquisitionResult Acquisition,
     CaptionSelectionResult? Captions, string? CaptionIssue, EditProject Project);
 
+/// One edit in one folder: where its project file and its copy of the media ended up.
+public sealed record FolderProjectResult(string ProjectPath, string MediaPath, EditProject Project);
+
 public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpeg = "ffmpeg", string ffprobe = "ffprobe",
     string ytDlp = "yt-dlp", IAcquisitionTool? acquisitionTool = null)
 {
@@ -20,6 +23,34 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
     public Task<VideoInfo> InspectAsync(string mediaPath, CancellationToken token = default)
         => _media.InspectAsync(workspace.Resolve(mediaPath), token);
 
+    /// Creates an edit in a folder of its own: the video is copied in beside the project file, so one
+    /// directory holds the whole edit. Copying rather than moving leaves the caller's own file untouched;
+    /// the copy is what the project fingerprints, so a later change to the original cannot invalidate it.
+    public async Task<FolderProjectResult> CreateProjectFolderAsync(string mediaPath, string folderPath,
+        IProgress<double>? progress = null, CancellationToken token = default)
+    {
+        var source = workspace.Resolve(mediaPath);
+        var folder = workspace.Resolve(folderPath, mustExist: false);
+        if (File.Exists(folder) || Directory.Exists(folder))
+            throw new IOException("That edit folder already exists; choose a new one.");
+        var media = Path.Combine(folder, Path.GetFileName(source));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            await ProjectFolder.CopyAsync(source, media, progress, token);
+            var relativeFolder = Path.GetRelativePath(workspace.Root, folder).Replace('\\', '/');
+            var project = await CreateProjectAsync($"{relativeFolder}/{Path.GetFileName(media)}",
+                $"{relativeFolder}/{ProjectFolder.DefaultProjectFileName}", token);
+            return new(Path.Combine(folder, ProjectFolder.DefaultProjectFileName), media, project);
+        }
+        catch
+        {
+            // A folder that never became an edit is removed, rather than left as a half-made project.
+            try { Directory.Delete(folder, recursive: true); } catch (IOException) { }
+            throw;
+        }
+    }
+
     public async Task<EditProject> CreateProjectAsync(string mediaPath, string projectPath, CancellationToken token = default)
     {
         var source = workspace.Resolve(mediaPath);
@@ -29,7 +60,7 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         var relative = Path.GetRelativePath(Path.GetDirectoryName(destination)!, source).Replace('\\', '/');
         if (!ProjectValidator.IsPortablePath(relative))
             throw new ArgumentException("Media must be inside the project directory.");
-        var info = await _media.InspectAsync(source, token);
+        var info = await _media.ProbeAsync(source, token);
         var project = new EditProject
         {
             TimeBase = info.TimeBase,
@@ -434,10 +465,42 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
 
     /// Delivery preflight answers a different question from the strict one: not whether the retained
     /// material can be copied untouched, but whether this timeline can be re-encoded into one portable file.
-    public async Task<DeliveryPlan> PreflightDeliveryAsync(string projectPath, CancellationToken token = default)
+    public async Task<DeliveryPlan> PreflightDeliveryAsync(string projectPath, CancellationToken token = default,
+        string? format = null)
     {
         var path = workspace.Resolve(projectPath);
-        return DeliveryExporter.Plan(await _store.LoadAsync(path, token), path);
+        return DeliveryExporter.Plan(await _store.LoadAsync(path, token), path, DeliveryTarget.Parse(format));
+    }
+
+    /// Codecs an MP4 is allowed to carry when copying. Matroska takes anything, so it needs no such list.
+    private static readonly string[] Mp4Codecs = ["h264", "hevc", "av1", "mpeg4", "vp9"];
+
+    /// What this project can be exported as, so a caller offering a choice does not keep its own list of
+    /// formats in step with the exporters. The copy options name the source's own video codec, because that
+    /// is the packet stream a mux would write; MP4 is offered only where those codecs belong in one.
+    public async Task<ExportFormatList> ListExportFormatsAsync(string projectPath, CancellationToken token = default)
+    {
+        var path = workspace.Resolve(projectPath);
+        var project = await _store.LoadAsync(path, token);
+        var sources = project.Timeline
+            .Select(clip => project.Assets.Single(asset => asset.Id == clip.AssetId))
+            .DistinctBy(asset => asset.Id).Where(asset => asset.Kind == "video").ToArray();
+        var reader = new MediaReader(ffmpeg, ffprobe);
+        var codecs = new List<string>();
+        foreach (var asset in sources)
+            codecs.Add((await reader.ProbeAsync(ProjectFiles.Resolve(path, asset.Path), token)).Codec);
+        var distinct = codecs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var video = distinct.Length == 0 ? "source" : string.Join(" + ", distinct);
+        var options = new List<ExportFormatOption>();
+        if (sources.Length > 0)
+        {
+            options.Add(new("original-mkv", $"Original: {video} (.mkv)", ".mkv", video, "source", true));
+            if (distinct.All(codec => Mp4Codecs.Contains(codec, StringComparer.OrdinalIgnoreCase)))
+                options.Add(new("original-mp4", $"Original: {video} (.mp4)", ".mp4", video, "source", true));
+        }
+        options.AddRange(DeliveryTarget.All.Select(target => new ExportFormatOption(target.Name, target.Label,
+            target.Extension, target.VideoCodec, target.AudioCodec, false)));
+        return new(1, project.Revision, options.ToArray());
     }
 
     /// Measures the shape of a source's sound over a range, so a caller can find its sections without
@@ -473,16 +536,18 @@ public sealed class RoughCutOperations(WorkspaceBoundary workspace, string ffmpe
         => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool).ListFormatsAsync(sourceUrl, denoPath, token);
 
     public Task<AcquisitionResult> AcquireAsync(string sourceUrl, string destinationDirectory,
-        string? denoPath = null, CancellationToken token = default, string? format = null)
-        => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool).AcquireAsync(sourceUrl, destinationDirectory, denoPath, token, format);
+        string? denoPath = null, CancellationToken token = default, string? format = null,
+        IProgress<double>? progress = null)
+        => new YtDlpAcquirer(workspace, ytDlp, acquisitionTool)
+            .AcquireAsync(sourceUrl, destinationDirectory, denoPath, token, format, progress);
 
     /// Acquires one URL with its subtitles, creates a project beside the downloaded media and selects the
     /// best caption track. Keeps the whole URL-to-project sequence in one place so hosts cannot diverge.
     public async Task<UrlProjectResult> CreateProjectFromUrlAsync(string sourceUrl, string destinationDirectory,
         string? denoPath = null, string preferredLanguage = "en", CancellationToken token = default,
-        string? format = null)
+        string? format = null, IProgress<double>? progress = null)
     {
-        var acquisition = await AcquireAsync(sourceUrl, destinationDirectory, denoPath, token, format);
+        var acquisition = await AcquireAsync(sourceUrl, destinationDirectory, denoPath, token, format, progress);
         // The media must stay inside the project directory, so the project is written into the acquired folder.
         var directory = workspace.Resolve(destinationDirectory);
         var inner = new RoughCutOperations(new WorkspaceBoundary(directory), ffmpeg, ffprobe, ytDlp, acquisitionTool);

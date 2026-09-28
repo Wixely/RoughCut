@@ -51,8 +51,9 @@ try
                   export <project.json> <new-output-directory> [--allow-encode]
                   preflight-mux <project.json> [mkv|mp4]
                   mux <project.json> <new-output-directory> [mkv|mp4]
-                  preflight-delivery <project.json>
-                  deliver <project.json> <new-output-directory>
+                  export-formats <project.json>
+                  preflight-delivery <project.json> [mp4|mkv|mov|webm]
+                  deliver <project.json> <new-output-directory> [mp4|mkv|mov|webm]
 
                 Frame requests use source-relative presentation time. JSON metadata goes to stdout.
                 Export is bounded to the documented Matroska video/PCM fixture matrix.
@@ -301,15 +302,24 @@ try
                 Console.WriteLine(JsonSerializer.Serialize(report, MediaJson.Default.MuxReport));
                 break;
             }
-        case ["preflight-delivery", var path]:
+        case ["export-formats", var path]:
             {
-                var plan = DeliveryExporter.Plan(await store.LoadAsync(path, token), path);
+                var formats = await new RoughCutOperations(new WorkspaceBoundary(Path.GetDirectoryName(Path.GetFullPath(path))!),
+                    ffmpeg, ffprobe).ListExportFormatsAsync(Path.GetFileName(path), token);
+                Console.WriteLine(JsonSerializer.Serialize(formats, ApplicationJson.Default.ExportFormatList));
+                break;
+            }
+        case ["preflight-delivery", var path, .. var deliveryPlanOptions] when deliveryPlanOptions.Length <= 1:
+            {
+                var plan = DeliveryExporter.Plan(await store.LoadAsync(path, token), path,
+                    DeliveryTarget.Parse(deliveryPlanOptions.FirstOrDefault()));
                 Console.WriteLine(JsonSerializer.Serialize(plan, ProjectJson.Default.DeliveryPlan));
                 return plan.Supported ? 0 : 2;
             }
-        case ["deliver", var path, var destination]:
+        case ["deliver", var path, var destination, .. var deliveryOptions] when deliveryOptions.Length <= 1:
             {
-                var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination, token);
+                var report = await new DeliveryExporter(ffmpeg, ffprobe).ExportAsync(path, destination, token,
+                    DeliveryTarget.Parse(deliveryOptions.FirstOrDefault()));
                 Console.WriteLine(JsonSerializer.Serialize(report, ProjectJson.Default.DeliveryReport));
                 break;
             }
@@ -323,7 +333,7 @@ try
                     throw new ArgumentException("Keep the source inside the project directory (for example media/source.mp4).");
                 if (Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
                     throw new ArgumentException("Project destination must differ from source media.");
-                var info = await media.InspectAsync(source, token);
+                var info = await media.ProbeAsync(source, token);
                 var project = new EditProject
                 {
                     TimeBase = info.TimeBase,

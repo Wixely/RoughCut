@@ -29,6 +29,7 @@ The current tools are:
 | `roughcut_read_project` | Validate and return a project and current revision |
 | `roughcut_inspect_video` | Inspect bounded local video metadata |
 | `roughcut_create_project` | Create a portable project for workspace media |
+| `roughcut_create_project_folder` | Create one edit in a folder of its own, copying the media in beside the project |
 | `roughcut_get_frame` | Return timing JSON and an actual `image/png` MCP content block |
 | `roughcut_get_timeline_frame` | Resolve an exact project revision/timeline time and return metadata plus the rendered `image/png` content block |
 | `roughcut_apply_edits` | Apply one revision-checked edit batch |
@@ -53,8 +54,9 @@ The current tools are:
 | `roughcut_list_source_formats` | List a URL's renditions with size, bitrate and codecs so the caller picks one or a bitrate policy |
 | `roughcut_preflight_export` | Return exact supported/unsupported export decisions |
 | `roughcut_start_export` | Queue a persisted export job |
-| `roughcut_preflight_delivery` | Report whether the timeline can be re-encoded to one H.264/AAC MP4, without starting the media tools |
-| `roughcut_start_delivery` | Queue a persisted job that re-encodes the timeline into a delivery file |
+| `roughcut_list_export_formats` | List what a project can be exported as: copies that keep the source's packets, and the re-encoded delivery formats |
+| `roughcut_preflight_delivery` | Report whether the timeline can be re-encoded into the chosen format, without starting the media tools |
+| `roughcut_start_delivery` | Queue a persisted job that re-encodes the timeline into `mp4`, `mkv`, `mov` or `webm` |
 | `roughcut_list_cut_points` | Report the copy anchors around a time, their offsets, audio alignment and the source's median keyframe interval |
 | `roughcut_preflight_mux` | Resolve every boundary onto a copy anchor and report the plan, without encoding anything |
 | `roughcut_start_mux` | Queue a persisted job that copies the retained material into a new container |
@@ -69,8 +71,10 @@ Mux is the third ([decision 0022](decisions/0022-stream-copy-mux-export.md)), an
 
 Measurement tools return numbers, never verdicts ([decision 0023](decisions/0023-measurement-inside-roughcut.md)). `roughcut_profile_audio` reports what the sound does window by window, including the share of energy below a band split, which separates material carrying bass and drums from speech at the same loudness. Where the sections are, and what to cut, stays the caller's decision.
 
+A running delivery or mux job reports real progress: `progressPercent` follows FFmpeg's own position between starting and the checks that publish the bundle, recorded at most once per whole percent because each update is a checkpoint write. It never reaches 100 while validation is still to come.
+
 Jobs are serialized atomically under `<workspace>/.roughcut/jobs`, retain at most 100 records and run exports one at a time. An interrupted `queued` or `running` checkpoint becomes `failed` when the next host starts; automatic resume is not claimed. Export staging cleanup and atomic bundle publication remain the export engine's responsibility.
 
-The executable protocol checks launch the host with the official MCP client, list all 34 tools, persist stable diarization assignments, verify safe missing-configuration behavior for local Sherpa and Whisper, synthesize through a loopback HTTP fixture, receive and decode source/timeline PNG and voice-preview WAVE content blocks, exercise reversible speaker/voice changes, assess captions, persist evidence-backed analysis, prove uncertain removals remain review-only, reject workspace escapes and stale revisions, import/insert a PNG, complete an encoded image export, complete a delivery job that publishes an H.264/AAC MP4, and cancel a separate durable export without publishing output. Live Sherpa and WSL/CUDA Qwen provider acceptance are recorded separately. The stdio host is a normal .NET deployment because its reflection-based MCP schema and native speech runtimes have not been qualified for NativeAOT.
+The executable protocol checks launch the host with the official MCP client, list all 36 tools, persist stable diarization assignments, verify safe missing-configuration behavior for local Sherpa and Whisper, synthesize through a loopback HTTP fixture, receive and decode source/timeline PNG and voice-preview WAVE content blocks, exercise reversible speaker/voice changes, assess captions, persist evidence-backed analysis, prove uncertain removals remain review-only, reject workspace escapes and stale revisions, import/insert a PNG, complete an encoded image export, complete a delivery job that publishes an H.264/AAC MP4, and cancel a separate durable export without publishing output. Live Sherpa and WSL/CUDA Qwen provider acceptance are recorded separately. The stdio host is a normal .NET deployment because its reflection-based MCP schema and native speech runtimes have not been qualified for NativeAOT.
 
 Analysis submissions are untrusted data. MCP callers supply provider/model identity, bounded source-time evidence and observations; RoughCut validates and maps them through the policy described in the [analysis guide](analysis.md). No MCP tool executes provider-generated commands or silently discloses media to another service.

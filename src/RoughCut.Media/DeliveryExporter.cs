@@ -23,20 +23,23 @@ public sealed class DeliveryExporter(string ffmpeg = "ffmpeg", string ffprobe = 
     /// Four hours, which is far beyond anything acquisition or the review window produces today.
     public static readonly TimeSpan MaxDuration = TimeSpan.FromHours(4);
 
-    public async Task<DeliveryPlan> PreflightAsync(string projectPath, CancellationToken cancellationToken = default)
+    public async Task<DeliveryPlan> PreflightAsync(string projectPath, CancellationToken cancellationToken = default,
+        DeliveryTarget? target = null)
     {
         projectPath = Path.GetFullPath(projectPath);
-        return Plan(await new ProjectStore().LoadAsync(projectPath, cancellationToken), projectPath);
+        return Plan(await new ProjectStore().LoadAsync(projectPath, cancellationToken), projectPath, target);
     }
 
     /// Preflight is pure and never starts the media tools, so a caller can see what delivery would do
     /// before paying for an encode. Everything that needs the decoder is checked inside ExportAsync.
-    public static DeliveryPlan Plan(EditProject project, string projectPath)
+    public static DeliveryPlan Plan(EditProject project, string projectPath, DeliveryTarget? target = null)
     {
         ProjectValidator.EnsureValid(project);
+        var chosen = target ?? DeliveryTarget.Mp4;
         var hash = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(project, ProjectJson.Default.EditProject)));
         DeliveryPlan Rejected(string code, string location, string message) =>
-            new(project.ProjectId, project.Revision, hash, false, [new(code, location, message)], [], 0, 0, 0);
+            new(project.ProjectId, project.Revision, hash, false, [new(code, location, message)], [], 0, 0, 0,
+                chosen.VideoCodec, chosen.AudioCodec, chosen.Container);
         if (project.Timeline.Length is 0 or > MaxClips)
             return Rejected("unsupported-timeline", "timeline", $"Delivery renders 1 to {MaxClips} clips.");
         var assets = project.Assets.ToDictionary(asset => asset.Id, StringComparer.Ordinal);
@@ -66,18 +69,21 @@ public sealed class DeliveryExporter(string ffmpeg = "ffmpeg", string ffprobe = 
             return new DeliveryClip(map.ClipId, map.AssetId, map.SourceIn, map.SourceOut, map.OutputIn, map.OutputOut,
                 clip.Crop, clip.Fit, clip.Audio);
         }).ToArray();
-        return new(project.ProjectId, project.Revision, hash, true, [], clips, width, height, duration);
+        return new(project.ProjectId, project.Revision, hash, true, [], clips, width, height, duration,
+            chosen.VideoCodec, chosen.AudioCodec, chosen.Container);
     }
 
     public async Task<DeliveryReport> ExportAsync(string projectPath, string outputDirectory,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, DeliveryTarget? target = null,
+        IProgress<double>? progress = null)
     {
+        var chosen = target ?? DeliveryTarget.Mp4;
         projectPath = Path.GetFullPath(projectPath);
         outputDirectory = Path.GetFullPath(outputDirectory);
         if (File.Exists(outputDirectory) || Directory.Exists(outputDirectory))
             throw new IOException("Output directory already exists; choose a new destination.");
         var project = await new ProjectStore().LoadAsync(projectPath, cancellationToken);
-        var plan = Plan(project, projectPath);
+        var plan = Plan(project, projectPath, chosen);
         if (!plan.Supported) throw new DeliveryRejectedException(plan);
         var assets = plan.Clips.Select(clip => clip.AssetId).Distinct(StringComparer.Ordinal)
             .Select(id => project.Assets.Single(asset => asset.Id == id)).ToArray();
@@ -97,18 +103,22 @@ public sealed class DeliveryExporter(string ffmpeg = "ffmpeg", string ffprobe = 
         Directory.CreateDirectory(staging);
         try
         {
-            var output = Path.Combine(staging, "video.mp4");
+            var output = Path.Combine(staging, chosen.FileName);
             var order = assets.Select(asset => asset.Id).ToArray();
+            var planned = Seconds(plan.Duration, project.TimeBase);
             await ToolProcess.RunAsync(ffmpeg,
-                BuildArguments(project, plan, order, id => paths[id], id => probes[id].HasAudio, output),
-                timeout: MaxDuration, cancellationToken: cancellationToken);
+                BuildArguments(project, plan, order, id => paths[id], id => probes[id].HasAudio, output, chosen,
+                    progress is not null),
+                timeout: MaxDuration, cancellationToken: cancellationToken,
+                onOutputLine: progress is null ? null : line => EncodeProgress.Report(line, planned, progress));
             cancellationToken.ThrowIfCancellationRequested();
             var bytes = new FileInfo(output).Length;
             if (bytes <= 0 || bytes >= MaxOutputBytes)
                 throw new InvalidDataException("Delivered file is empty or reached the 8 GiB output budget.");
             var delivered = await ProbeAsync(output, cancellationToken);
-            if (delivered.VideoCodec != "h264" || delivered.AudioCodec != "aac")
-                throw new InvalidDataException("Delivered file does not carry the promised H.264 video and AAC audio.");
+            if (delivered.VideoCodec != chosen.VideoCodec || delivered.AudioCodec != chosen.AudioCodec)
+                throw new InvalidDataException(
+                    $"Delivered file does not carry the promised {chosen.VideoCodec} video and {chosen.AudioCodec} audio.");
             var expected = Seconds(plan.Duration, project.TimeBase);
             // A re-encode still has to land on the timeline it claims. Each cut can move by at most the
             // frame it falls inside, so the tolerance grows with the number of cuts rather than being fixed.
@@ -145,9 +155,12 @@ public sealed class DeliveryExporter(string ffmpeg = "ffmpeg", string ffprobe = 
     /// One filter graph cuts each clip out of its source, fits it to the delivered frame and concatenates
     /// the result, so ordering and cuts are applied exactly once, by the encoder, from decoded frames.
     internal static string[] BuildArguments(EditProject project, DeliveryPlan plan, string[] assets,
-        Func<string, string> path, Func<string, bool> hasAudio, string output)
+        Func<string, string> path, Func<string, bool> hasAudio, string output, DeliveryTarget target,
+        bool reportProgress = false)
     {
         var arguments = new List<string> { "-v", "error", "-nostdin", "-xerror", "-n" };
+        // Progress goes to standard output, which nothing else here uses: the encode writes to a file.
+        if (reportProgress) arguments.AddRange(EncodeProgress.Arguments);
         foreach (var id in assets)
             arguments.AddRange(["-protocol_whitelist", "file", "-format_whitelist", Containers, "-noautorotate", "-i", path(id)]);
         var silence = assets.Length;
@@ -175,11 +188,8 @@ public sealed class DeliveryExporter(string ffmpeg = "ffmpeg", string ffprobe = 
         }
         graph.Append(concat).Append(FormattableString.Invariant($"concat=n={plan.Clips.Length}:v=1:a=1[v][a]"));
 
-        arguments.AddRange(["-filter_complex", graph.ToString(), "-map", "[v]", "-map", "[a]", "-fps_mode", "vfr",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart",
-            "-map_metadata", "-1", "-map_chapters", "-1",
-            "-fs", MaxOutputBytes.ToString(CultureInfo.InvariantCulture), "-f", "mp4", output]);
+        arguments.AddRange(["-filter_complex", graph.ToString(), "-map", "[v]", "-map", "[a]", "-fps_mode", "vfr"]);
+        arguments.AddRange(target.EncodeArguments(MaxOutputBytes, output));
         return arguments.ToArray();
     }
 

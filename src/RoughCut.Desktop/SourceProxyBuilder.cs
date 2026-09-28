@@ -57,7 +57,7 @@ public sealed class SourceProxyBuilder(string ffmpeg = "ffmpeg", string ffprobe 
         var length = new FileInfo(path).Length;
         if (length is <= 0 or > MaxProxyBytes)
             throw new DesktopPlaybackUnavailableException("The preview copy is empty or exceeds its 512 MiB bound.");
-        var info = await new MediaReader(ffmpeg, ffprobe).InspectAsync(path, token);
+        var info = await new MediaReader(ffmpeg, ffprobe).ProbeAsync(path, token);
         if (info.Codec != "vp9")
             throw new DesktopPlaybackUnavailableException("The preview copy is not the VP9 the player decodes.");
         var seconds = (double)info.DurationTicks * info.TimeBase.Numerator / info.TimeBase.Denominator;

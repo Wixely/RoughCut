@@ -74,11 +74,25 @@ The flag cannot override `copy-only` mode or another unsupported result. Export 
 
 Delivery ([decision 0020](decisions/0020-delivery-encode-export.md)) renders the retained timeline into one H.264/AAC MP4 by decoding, cutting and re-encoding. It exists because the strict matrix above refuses ordinary acquired media — an AV1/Opus download or an H.264/AAC MP4 cannot be exported at all — and a person still needs a file they can send.
 
-One FFmpeg filter graph does the whole job: each clip is trimmed out of its source with `trim`/`atrim`, cropped if the clip has a crop, fitted into one frame size with its `contain` or `cover` policy, and the results are concatenated. Cuts and ordering are therefore applied exactly once, by the encoder, from decoded frames. Audio is resampled to 48 kHz stereo. Video is `libx264` at CRF 20, audio is AAC at 192 kbit/s, with `+faststart` and no source metadata or chapters.
+One FFmpeg filter graph does the whole job: each clip is trimmed out of its source with `trim`/`atrim`, cropped if the clip has a crop, fitted into one frame size with its `contain` or `cover` policy, and the results are concatenated. Cuts and ordering are therefore applied exactly once, by the encoder, from decoded frames. Audio is resampled to 48 kHz stereo, and no source metadata or chapters are carried.
+
+Four targets are offered, and a target is a claim about what the delivered file carries — so each one's output is probed for exactly those codecs before it is published, and anything not listed here is not offered:
+
+| Name | Container | Video | Audio |
+| --- | --- | --- | --- |
+| `mp4` | MP4, `+faststart` | `libx264` CRF 20 | AAC 192 kbit/s |
+| `mkv` | Matroska | `libx264` CRF 20 | AAC 192 kbit/s |
+| `mov` | QuickTime, `+faststart` | `libx264` CRF 20 | AAC 192 kbit/s |
+| `webm` | WebM | `libvpx-vp9` CRF 32, `-deadline good -cpu-used 2` | Opus 128 kbit/s |
+
+`mp4` is the default, because every delivery written before a caller could choose produced exactly that and an older report must still describe what it holds. WebM is quality-targeted VP9 rather than the realtime settings the preview proxies use, and is markedly slower than the H.264 targets on the same timeline.
+
+`export-formats` lists what one project can be exported as — the copy options first, naming the source's own codec, then these four — so a caller offering a choice does not keep its own list in step with the exporters. `roughcut_list_export_formats` returns the same list.
 
 ```powershell
-dotnet run --project src/RoughCut.Cli -- preflight-delivery artifacts/demo/project.json
-dotnet run --project src/RoughCut.Cli -- deliver artifacts/demo/project.json artifacts/demo/delivery
+dotnet run --project src/RoughCut.Cli -- export-formats artifacts/demo/project.json
+dotnet run --project src/RoughCut.Cli -- preflight-delivery artifacts/demo/project.json webm
+dotnet run --project src/RoughCut.Cli -- deliver artifacts/demo/project.json artifacts/demo/delivery webm
 ```
 
 `preflight-delivery` starts no process at all: it maps the timeline, checks the bounds and reports the frame size, clips and duration a delivery would produce, so the cost of an encode is only paid deliberately. It exits nonzero when delivery would refuse.
@@ -89,7 +103,9 @@ The review window exports through this path — see the [desktop guide](desktop.
 
 Delivery refuses, naming the reason, what it cannot render faithfully in this slice: timed image holds and applied voice replacements, both of which the strict path renders and validates. A missing source file, an empty or oversized timeline and an over-long output are refused before anything runs. A source that carries no audio is rendered with generated silence and named in `silencedAssets` rather than quietly losing its audio track.
 
-What delivery checks before publishing: the delivered file really is H.264 and AAC, it is non-empty and inside the size budget, its duration matches the plan's within the frame each cut lands inside, and every source fingerprint matches the project both before the encode and before publication. What it does not check, and does not claim: frame hashes, sample equality or packet payloads. The bundle is `video.mp4`, `delivery.json` and, when cues survive, `captions.srt`, published by the same staging-and-rename that the strict path uses.
+What delivery checks before publishing: the delivered file really is H.264 and AAC, it is non-empty and inside the size budget, its duration matches the plan's within the frame each cut lands inside, and every source fingerprint matches the project both before the encode and before publication. What it does not check, and does not claim: frame hashes, sample equality or packet payloads. The bundle is `video` with the target's extension, `delivery.json` and, when cues survive, `captions.srt`, published by the same staging-and-rename that the strict path uses. The plan and the report both name the container and codecs, so a bundle says what it holds.
+
+Delivery and mux both report progress from FFmpeg's own `out_time_us` against the planned duration, which is what fills in an export job's `progressPercent` and the review window's bar. Progress is a comfort, never a check: a line that cannot be read moves nothing.
 
 A delivered file is a re-encode. It is not evidence about its source, and where that evidence is the point, use the strict bundle.
 

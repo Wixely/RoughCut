@@ -261,6 +261,13 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         catch (Exception exception) { return Error(exception); }
     }
 
+    [McpServerTool(Name = "roughcut_create_project_folder")]
+    [Description("Create one edit in a folder of its own: the chosen workspace video is copied into a new folder and a project file is created beside it, so the media, the project and its generated assets sit together. Use this rather than roughcut_create_project when the media is not already where the edit should live.")]
+    public Task<CallToolResult> CreateProjectFolderAsync(string mediaPath, string folderPath,
+        CancellationToken cancellationToken)
+        => TextAsync(() => operations.CreateProjectFolderAsync(mediaPath, folderPath, null, cancellationToken),
+            ApplicationJson.Default.FolderProjectResult);
+
     [McpServerTool(Name = "roughcut_import_image")]
     [Description("Decode and validate a bounded base64 PNG, store it as a content-addressed portable project asset, and advance the expected revision.")]
     public Task<CallToolResult> ImportImageAsync(string projectPath, string assetId, string base64Png,
@@ -292,9 +299,16 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         => TextAsync(() => operations.PreflightAsync(projectPath, cancellationToken), ProjectJson.Default.ExportPlan);
 
     [McpServerTool(Name = "roughcut_preflight_delivery", ReadOnly = true)]
-    [Description("Report whether the retained timeline can be re-encoded into one portable H.264/AAC MP4, and the frame size, clips and duration it would deliver. Never writes output and never starts the media tools.")]
-    public Task<CallToolResult> PreflightDeliveryAsync(string projectPath, CancellationToken cancellationToken)
-        => TextAsync(() => operations.PreflightDeliveryAsync(projectPath, cancellationToken), ProjectJson.Default.DeliveryPlan);
+    [Description("Report whether the retained timeline can be re-encoded into one portable file, and the frame size, clips, duration and codecs it would deliver. Never writes output and never starts the media tools.")]
+    public Task<CallToolResult> PreflightDeliveryAsync(string projectPath, CancellationToken cancellationToken,
+        [Description("A delivery format from roughcut_list_export_formats: mp4, mkv, mov or webm. Defaults to mp4.")]
+        string? format = null)
+        => TextAsync(() => operations.PreflightDeliveryAsync(projectPath, cancellationToken, format), ProjectJson.Default.DeliveryPlan);
+
+    [McpServerTool(Name = "roughcut_list_export_formats", ReadOnly = true)]
+    [Description("List what this project can be exported as: the copy options that keep the source's own packets, whose cuts land on keyframes, and the re-encoded delivery formats, whose cuts land exactly. Use this rather than assuming a format is available.")]
+    public Task<CallToolResult> ListExportFormatsAsync(string projectPath, CancellationToken cancellationToken)
+        => TextAsync(() => operations.ListExportFormatsAsync(projectPath, cancellationToken), ApplicationJson.Default.ExportFormatList);
 
     [McpServerTool(Name = "roughcut_preflight_mux", ReadOnly = true)]
     [Description("Report where every cut would land if the timeline were copied rather than re-encoded: the anchor each boundary moves to, how far it moved, the copied length against the requested one, and the worst movement. Copying keeps the source's own packets untouched and is fast, but cuts land on keyframes. Use roughcut_list_cut_points first to see the anchors, and delivery instead when a cut must land exactly.")]
@@ -308,9 +322,11 @@ public sealed class RoughCutTools(RoughCutOperations operations, ExportJobManage
         => Run(() => Text(jobs.Start(projectPath, outputDirectory, allowEncoding: false, mode: "mux", container: container)));
 
     [McpServerTool(Name = "roughcut_start_delivery")]
-    [Description("Queue one durable delivery job that re-encodes the timeline into H.264/AAC MP4. Unlike the strict export this never copies source packets; it claims a faithful edit, not an untouched copy. Output must be a new workspace-relative directory.")]
-    public CallToolResult StartDelivery(string projectPath, string outputDirectory)
-        => Run(() => Text(jobs.Start(projectPath, outputDirectory, allowEncoding: true, mode: "delivery")));
+    [Description("Queue one durable delivery job that re-encodes the timeline into the chosen format. Unlike the strict export this never copies source packets; it claims a faithful edit, not an untouched copy. Output must be a new workspace-relative directory.")]
+    public CallToolResult StartDelivery(string projectPath, string outputDirectory,
+        [Description("mp4 (H.264/AAC, the default), mkv, mov, or webm (VP9/Opus). To keep the source's own packets instead, use roughcut_start_mux.")]
+        string format = "mp4")
+        => Run(() => Text(jobs.Start(projectPath, outputDirectory, allowEncoding: true, mode: "delivery", format: format)));
 
     [McpServerTool(Name = "roughcut_start_export")]
     [Description("Queue one bounded, durable export job. Output must be a new workspace-relative directory.")]

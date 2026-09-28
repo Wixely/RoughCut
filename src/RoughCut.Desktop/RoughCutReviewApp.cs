@@ -1,6 +1,7 @@
 using CupriFace;
 using CupriFace.Binding;
 using CupriFace.Interaction;
+using RoughCut.Application;
 using RoughCut.Core;
 using SkiaSharp;
 
@@ -18,6 +19,15 @@ public sealed class RoughCutReviewApp : CupriApp
     private CupriDocument? _document;
     private CancellationTokenSource? _playbackCancellation;
     private CancellationTokenSource? _exportCancellation;
+    /// What the person picked in the launcher: the source they asked about and the renditions it offers, so
+    /// choosing a quality does not have to ask the source a second time.
+    private SourceFormatList? _offered;
+    private string _pendingUrl = "";
+    /// The export format the button will use. A copy is the default: it keeps the source's own packets and
+    /// finishes in seconds, which is what a cut-down usually wants.
+    private string _exportFormat = "original-mkv";
+    private FileSystemWatcher? _projectWatcher;
+    private int _watcherPending;
     private long _playbackGeneration;
     private CropDragState? _cropDrag;
     private TransportDragState? _transportDrag;
@@ -109,7 +119,12 @@ public sealed class RoughCutReviewApp : CupriApp
         document.OnClick(".open-path", _ => OpenOrCreate(_model.OpenPath));
         document.OnClick(".browse", _ => Browse(create: false));
         document.OnClick(".new-project", _ => Browse(create: true));
-        document.OnClick(".new-url", _ => CreateFromUrl(_model.OpenUrl));
+        document.OnClick(".new-url", _ => ListFormats(_model.OpenUrl));
+        document.OnClick(".format-pick", e => DownloadChosen(Required(e, "data-format")));
+        document.OnClick(".choose-folder", _ => ChooseFolder());
+        document.OnClick(".cancel-work", _ => CancelWork());
+        document.OnClick(".export-choose", _ => ToggleExportMenu());
+        document.OnClick(".export-format", e => ChooseExportFormat(Required(e, "data-format")));
         document.OnClick(".close-project", _ => ShowLauncher("Choose another project to review."));
         document.OnFileDrop(drop =>
         {
@@ -240,6 +255,7 @@ public sealed class RoughCutReviewApp : CupriApp
 
     private void StartReview()
     {
+        WatchProject(Session.ProjectPath);
         if (Session.Preview is null)
             StartLatest(Session.InitializePreviewAsync, seekAfter: true,
                 startPlaybackAfter: playback is not null && Session.Playback is null);
@@ -250,6 +266,7 @@ public sealed class RoughCutReviewApp : CupriApp
     private void ShowLauncher(string? message = null)
     {
         CancelPlaybackPreparation();
+        StopWatchingProject();
         _session = null;
         _model.Recent = ToRecentRows(_recent.Load());
         _model.RecentEmptyClass = _model.Recent.Length == 0 ? "" : "hidden";
@@ -309,15 +326,84 @@ public sealed class RoughCutReviewApp : CupriApp
         else CreateProject(path);
     }
 
-    private void OpenProject(string projectPath) => Start("Opening project…",
-        "Finish the current operation before opening another project.", async () =>
+    /// An agent editing the same project over MCP saves a new revision to disk. The window follows it, so a
+    /// person watching sees the edit appear instead of holding a stale timeline until they press Reload.
+    ///
+    /// Only a revision that differs from the open one is adopted: the window's own saves land on disk too,
+    /// and reloading those would undo the selection for no reason. The watcher is deliberately a hint that
+    /// something changed rather than a description of what changed.
+    private void WatchProject(string projectPath)
+    {
+        StopWatchingProject();
+        var directory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
+        if (directory is null || !Directory.Exists(directory)) return;
+        var watcher = new FileSystemWatcher(directory, Path.GetFileName(projectPath))
         {
-            var opened = await DesktopReviewSession.LoadAsync(Clean(projectPath));
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName
+        };
+        void Changed(object sender, FileSystemEventArgs e) => ProjectFileChanged();
+        watcher.Changed += Changed;
+        watcher.Created += Changed;
+        watcher.Renamed += (_, _) => ProjectFileChanged();
+        watcher.EnableRaisingEvents = true;
+        _projectWatcher = watcher;
+    }
+
+    private void StopWatchingProject()
+    {
+        var watcher = _projectWatcher;
+        _projectWatcher = null;
+        watcher?.Dispose();
+    }
+
+    /// A save arrives as several filesystem events, and the file is briefly a temporary being renamed into
+    /// place, so this coalesces them and gives the writer a moment to finish before reading.
+    private void ProjectFileChanged()
+    {
+        if (Interlocked.Exchange(ref _watcherPending, 1) == 1) return;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(250);
+            Interlocked.Exchange(ref _watcherPending, 0);
+            var session = _session;
+            if (session is null) return;
+            long revision;
+            try { revision = (await new ProjectStore().LoadAsync(session.ProjectPath)).Revision; }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or
+                ProjectValidationException or UnauthorizedAccessException)
+            {
+                // A half-written or briefly invalid file is not news; the next event will bring the truth.
+                return;
+            }
+            if (revision == session.Project.Revision) return;
+            Post(() =>
+            {
+                if (_session is null) return;
+                if (_work.IsBusy)
+                {
+                    // Something of the person's own is mid-flight. Ask again shortly rather than abandoning
+                    // the change; the debounce makes this a poll of a few hundred milliseconds, not a spin.
+                    ProjectFileChanged();
+                    return;
+                }
+                _model.Status = FormattableString.Invariant($"Following an outside change to revision {revision}…");
+                _document?.Refresh();
+                StartCommand(ReloadAsync, seekAfter: true, rebuildPlayback: true);
+            });
+        });
+    }
+
+    private void OpenProject(string projectPath) => Start("Opening project…",
+        "Finish the current operation before opening another project.", async token =>
+        {
+            var opened = await DesktopReviewSession.LoadAsync(Clean(projectPath), token);
             _session = opened;
             _recent.Record(opened.ProjectPath, opened.Project.ProjectId);
         }, Clean(projectPath));
 
-    private void CreateFromUrl(string sourceUrl)
+    /// Asks the source what it offers and shows it, so a person picks the quality themselves. Nothing is
+    /// downloaded here: this is the step that used to be an agent's job.
+    private void ListFormats(string sourceUrl)
     {
         sourceUrl = Clean(sourceUrl);
         if (sourceUrl.Length == 0)
@@ -326,30 +412,198 @@ public sealed class RoughCutReviewApp : CupriApp
             _document?.Refresh();
             return;
         }
-        Start("Downloading the video and its subtitles… this can take several minutes.",
-            "Finish the current operation before downloading a video.", async () =>
+        HideFormats();
+        ShowProgress("Reading the source…", indeterminate: true);
+        Start("Asking the source what it offers…", "Finish the current operation before fetching a video.",
+            async token =>
             {
-                var created = await DesktopReviewSession.CreateFromUrlAsync(sourceUrl);
-                _session = created;
-                _recent.Record(created.ProjectPath, created.Project.ProjectId);
+                var offered = await DesktopReviewSession.ListFormatsAsync(sourceUrl, token);
+                Post(() =>
+                {
+                    _offered = offered;
+                    _pendingUrl = sourceUrl;
+                    ShowFormats(offered);
+                });
             });
     }
 
-    private void CreateProject(string mediaPath) => Start("Creating a project for that video…",
-        "Finish the current operation before creating a project.", async () =>
-        {
-            var created = await DesktopReviewSession.CreateAsync(Clean(mediaPath));
-            _session = created;
-            _recent.Record(created.ProjectPath, created.Project.ProjectId);
-        }, Clean(mediaPath));
+    /// Shows a rendition list as though **Fetch** had just returned it. Used by the headless snapshot, so
+    /// the picker's layout can be rendered and looked at without a window or a pointer.
+    public void OfferFormats(string sourceUrl, SourceFormatList offered)
+    {
+        _pendingUrl = sourceUrl;
+        _offered = offered;
+        _model.LauncherClass = "";
+        _model.WorkspaceClass = "hidden";
+        ShowFormats(offered);
+    }
 
-    private void Start(string progress, string busy, Func<Task> action, string? path = null)
+    private void ShowFormats(SourceFormatList offered)
+    {
+        _model.FormatsClass = "";
+        _model.PickingHiddenClass = "hidden";
+        _model.FormatsListClass = "";
+        _model.FormatsTitle = offered.Title;
+        var sizes = offered.Formats.Where(format => format.Kind is "video" or "muxed" && format.Height > 0)
+            .Select(format => format.Height).Distinct().Count();
+        _model.FormatsHint = FormattableString.Invariant(
+            $"{offered.DurationSeconds / 60:0.0} min · best of {offered.Formats.Length}") +
+            (sizes > VisibleFormats ? FormattableString.Invariant($", largest {VisibleFormats} sizes") : "") +
+            FormattableString.Invariant($" · max {offered.MaxBytes / 1024d / 1024d:0} MiB");
+        _model.Formats = BestOfEachSize(offered)
+            .Select(format => new FormatRow
+            {
+                Id = format.Id,
+                Label = format.Kind switch
+                {
+                    "muxed" => FormattableString.Invariant($"{format.Height}p · {CodecName(format.VideoCodec)} + {CodecName(format.AudioCodec)}"),
+                    "audio" => FormattableString.Invariant($"Audio only · {CodecName(format.AudioCodec)}"),
+                    _ => FormattableString.Invariant($"{format.Height}p · {CodecName(format.VideoCodec)}")
+                },
+                Detail = FormattableString.Invariant(
+                        $"{format.Id} · {format.Extension}{(format.Fps > 0 ? FormattableString.Invariant($" · {format.Fps:0.#} fps") : "")}") +
+                    FormattableString.Invariant(
+                        $" · {format.BitrateKbps:0} kbps{(format.Kind == "video" ? " · sound added from the best audio" : "")}"),
+                Size = format.Bytes > 0
+                    ? FormattableString.Invariant($"{format.Bytes / 1024d / 1024d:0.0} MiB")
+                    : "size not stated"
+            }).ToArray();
+        // Where the edit will live, generated from the video's own title so a person need not invent a name.
+        _model.EditFolder = ProjectFolder.Unused(DesktopReviewSession.ProjectsRoot, offered.Title);
+        _model.OpenMessage = "Choose a quality, or edit the folder first.";
+        HideProgress();
+        _document?.Refresh();
+    }
+
+    /// The name a codec is known by, from the profile string a source reports it as. An unrecognised codec
+    /// keeps its own name rather than being guessed at.
+    private static string CodecName(string codec) => codec switch
+    {
+        _ when codec.StartsWith("avc", StringComparison.OrdinalIgnoreCase) => "H.264",
+        _ when codec.StartsWith("av0", StringComparison.OrdinalIgnoreCase) => "AV1",
+        _ when codec.StartsWith("vp9", StringComparison.OrdinalIgnoreCase) ||
+               codec.StartsWith("vp09", StringComparison.OrdinalIgnoreCase) => "VP9",
+        _ when codec.StartsWith("vp8", StringComparison.OrdinalIgnoreCase) => "VP8",
+        _ when codec.StartsWith("hev", StringComparison.OrdinalIgnoreCase) ||
+               codec.StartsWith("hvc", StringComparison.OrdinalIgnoreCase) => "HEVC",
+        _ when codec.StartsWith("mp4a", StringComparison.OrdinalIgnoreCase) => "AAC",
+        _ => codec
+    };
+
+    /// How many renditions the card can show without laying one over another. The list has room for this
+    /// many rows and no more; the rest are counted in the hint rather than drawn where they cannot be seen.
+    private const int VisibleFormats = 8;
+
+    /// One rendition per picture size, largest first. A source offers the same size several times over in
+    /// different codecs, which is a distinction a person picking a quality does not want to make: H.264 is
+    /// preferred where it exists because it plays everywhere and can be copied into an MP4, then AV1, then
+    /// VP9, and a declared size breaks any remaining tie. Audio-only renditions are not offered, because
+    /// picking one would produce an edit with no picture.
+    private static IEnumerable<SourceFormat> BestOfEachSize(SourceFormatList offered) =>
+        offered.Formats
+            .Where(format => format.Kind is "video" or "muxed" && format.Height > 0)
+            .GroupBy(format => format.Height)
+            .OrderByDescending(group => group.Key)
+            .Select(group => group
+                .OrderBy(format => format.VideoCodec.StartsWith("avc", StringComparison.OrdinalIgnoreCase) ? 0
+                    : format.VideoCodec.StartsWith("av0", StringComparison.OrdinalIgnoreCase) ? 1 : 2)
+                .ThenByDescending(format => format.Bytes > 0)
+                .ThenBy(format => format.Bytes)
+                .First())
+            .Take(VisibleFormats);
+
+    private void HideFormats()
+    {
+        _model.FormatsClass = "hidden";
+        _model.PickingHiddenClass = "";
+        _model.FormatsListClass = "";
+        _model.Formats = [];
+        _offered = null;
+    }
+
+    /// The folder the edit will live in. A person can type it, and this picks it with the platform's own
+    /// browser; either way it is one folder holding the media, the project and its assets.
+    private void ChooseFolder()
+    {
+        var owner = NativeFileDialog.ActiveWindow();
+        var current = Clean(_model.EditFolder);
+        var start = current.Length > 0 ? Path.GetDirectoryName(current) : DesktopReviewSession.ProjectsRoot;
+        _ = Task.Run(() =>
+        {
+            string? chosen = null;
+            try { chosen = NativeFileDialog.OpenFolder("Choose where this edit should live", start, owner); }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException or
+                UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException) { }
+            if (chosen is null) return;
+            Post(() =>
+            {
+                // The browser returns a containing folder, so the edit still gets a folder of its own inside
+                // it rather than scattering its files among whatever is already there.
+                var name = _offered?.Title ?? Path.GetFileName(Clean(_model.EditFolder));
+                _model.EditFolder = ProjectFolder.Unused(chosen, name);
+                _document?.Refresh();
+            });
+        });
+    }
+
+    private void DownloadChosen(string formatId)
+    {
+        if (_offered is null || _pendingUrl.Length == 0) return;
+        var folder = Clean(_model.EditFolder);
+        var title = _offered.Title;
+        // A picture-only rendition is listed as "sound added from the best audio", so the request carries
+        // that audio rather than failing on a rendition the window itself offered.
+        formatId = SourceFormatPolicy.WithAudio(_offered, formatId);
+        // The choice has been made, so the list steps aside for the download it started.
+        _model.FormatsListClass = "hidden";
+        ShowProgress("Starting the download…", cancellable: true);
+        Start($"Downloading {formatId} into {Path.GetFileName(folder)}…",
+            "Finish the current operation before downloading a video.", async token =>
+            {
+                var created = await DesktopReviewSession.CreateFromUrlAsync(_pendingUrl, token, formatId, folder,
+                    title, ProgressReporter("Downloading"));
+                _session = created;
+                _recent.Record(created.ProjectPath, created.Project.ProjectId);
+                Post(HideFormats);
+            });
+    }
+
+    /// A local video becomes an edit in its own folder, with the video copied in beside the project, so
+    /// everything belonging to the edit stays together. The person's own file is left where it is.
+    private void CreateProject(string mediaPath)
+    {
+        mediaPath = Clean(mediaPath);
+        var folder = ProjectFolder.Unused(DesktopReviewSession.ProjectsRoot,
+            Path.GetFileNameWithoutExtension(mediaPath));
+        _model.EditFolder = folder;
+        ShowProgress("Copying the video…", cancellable: true);
+        Start($"Copying the video into {Path.GetFileName(folder)}…",
+            "Finish the current operation before creating a project.", async token =>
+            {
+                var created = await DesktopReviewSession.CreateInFolderAsync(mediaPath, token, folder,
+                    ProgressReporter("Copying"));
+                _session = created;
+                _recent.Record(created.ProjectPath, created.Project.ProjectId);
+            }, mediaPath);
+    }
+
+    private void Start(string progress, string busy, Func<CancellationToken, Task> action, string? path = null)
     {
         _model.OpenMessage = progress;
         _model.Status = progress;
         _document?.Refresh();
-        if (_work.StartCommand(action, exception => Post(() =>
+        if (_work.StartCancellableCommand(action, exception => Post(() =>
         {
+            if (exception is OperationCanceledException)
+            {
+                // A cancelled fetch publishes nothing, so the launcher is exactly as it was.
+                _session = null;
+                HideProgress();
+                ShowLauncher("Cancelled; nothing was downloaded.");
+                _model.Status = "Cancelled.";
+                _document?.Refresh();
+                return;
+            }
             if (exception is null)
             {
                 _model.LauncherClass = "hidden";
@@ -362,6 +616,7 @@ public sealed class RoughCutReviewApp : CupriApp
                 // A project that will not open leaves the launcher visible with the reason, rather than
                 // dropping into an empty workspace or ending the process.
                 _session = null;
+                HideProgress();
                 var described = FailureText.Describe(exception, path);
                 ShowLauncher(described);
                 _model.Status = described;
@@ -538,6 +793,111 @@ public sealed class RoughCutReviewApp : CupriApp
 
     private void StartPlaybackPreparation() => StartPlaybackPreparation(exact: false);
 
+    /// Work a person waits on shows how far it has got. The bar is driven by the tool's own reported
+    /// position — yt-dlp's percentage, FFmpeg's output time — never by a timer pretending to be progress.
+    private void ShowProgress(string label, bool indeterminate = false, bool cancellable = false)
+    {
+        _model.ProgressClass = "";
+        _model.ProgressLabel = label;
+        _model.ProgressFillStyle = indeterminate ? "width:100%;opacity:0.35" : "width:0%";
+        _model.CancelClass = cancellable ? "" : "hidden";
+        _document?.Refresh();
+    }
+
+    private void HideProgress()
+    {
+        _model.ProgressClass = "hidden";
+        _model.ProgressLabel = "";
+        _model.ProgressFillStyle = "width:0%";
+        _model.CancelClass = "hidden";
+    }
+
+    /// Stops the download or copy in flight. Nothing is published by a cancelled fetch: the acquisition
+    /// stages into its own directory and a copy is written under a temporary name, so both disappear.
+    private void CancelWork()
+    {
+        _model.ProgressLabel = "Stopping…";
+        _model.CancelClass = "hidden";
+        _document?.Refresh();
+        if (_work.CancelCommand()) return;
+        // Nothing was running, so say so rather than leaving "Stopping…" on screen forever.
+        HideProgress();
+        _model.Status = "There was nothing to cancel.";
+        _document?.Refresh();
+    }
+
+    /// Refreshes at most once per whole percent: the tools report far more often than a person can read,
+    /// and every refresh re-renders the document.
+    private IProgress<double> ProgressReporter(string what)
+    {
+        var lastPercent = -1;
+        return new Progress<double>(fraction =>
+        {
+            var percent = (int)Math.Clamp(fraction * 100, 0, 100);
+            if (percent == lastPercent) return;
+            lastPercent = percent;
+            Post(() =>
+            {
+                _model.ProgressClass = "";
+                _model.ProgressLabel = FormattableString.Invariant($"{what} · {percent}%");
+                _model.ProgressFillStyle = FormattableString.Invariant($"width:{percent}%");
+                _document?.Refresh();
+            });
+        });
+    }
+
+    /// The formats this project can be exported as, asked of RoughCut rather than listed here, so the menu
+    /// cannot offer something the exporters cannot produce.
+    private void ToggleExportMenu()
+    {
+        if (_model.ExportMenuClass.Length == 0)
+        {
+            _model.ExportMenuClass = "hidden";
+            _document?.Refresh();
+            return;
+        }
+        if (_session is null) return;
+        StartLatest(async token =>
+        {
+            var formats = await Session.ListExportFormatsAsync(token);
+            Post(() =>
+            {
+                _model.ExportFormats = formats.Options.Select(option => new ExportFormatRow
+                {
+                    Name = option.Name,
+                    Label = option.Label,
+                    Detail = option.Copy
+                        ? "Keeps the source's own packets · fast · cuts move to the nearest keyframe"
+                        : FormattableString.Invariant($"Re-encodes every frame · {option.VideoCodec} + {option.AudioCodec} · cuts land exactly"),
+                    CssClass = option.Name == _exportFormat ? "chosen" : ""
+                }).ToArray();
+                // A project whose copy options changed underneath the selection falls back to the first.
+                if (_model.ExportFormats.All(row => row.Name != _exportFormat) && formats.Options.Length > 0)
+                    ChooseExportFormat(formats.Options[0].Name);
+                _model.ExportMenuClass = "";
+                _document?.Refresh();
+            });
+        });
+    }
+
+    private void ChooseExportFormat(string formatName)
+    {
+        _exportFormat = formatName;
+        var chosen = _model.ExportFormats.FirstOrDefault(row => row.Name == formatName);
+        foreach (var row in _model.ExportFormats) row.CssClass = row.Name == formatName ? "chosen" : "";
+        _model.ExportLabel = chosen is null ? ExportAction : "Export " + ShortLabel(chosen.Label);
+        _model.ExportMenuClass = "hidden";
+        _document?.Refresh();
+    }
+
+    /// The part of a format's label that fits on a button: "Original: av1 (.mkv)" becomes "Original .mkv".
+    private static string ShortLabel(string label)
+    {
+        var extension = label.LastIndexOf('.');
+        var suffix = extension < 0 ? "" : label[extension..].TrimEnd(')');
+        return label.StartsWith("Original", StringComparison.Ordinal) ? "Original " + suffix : label.Split(' ')[0];
+    }
+
     /// Exporting runs for as long as the encode takes, so the same button cancels it. A cancelled export
     /// publishes nothing, and the project is never changed by exporting it.
     private void ToggleExport()
@@ -554,14 +914,16 @@ public sealed class RoughCutReviewApp : CupriApp
         if (_session is null) return;
         var cancellation = new CancellationTokenSource();
         lock (_playbackSync) _exportCancellation = cancellation;
+        var chosen = _exportFormat;
         _model.ExportLabel = "Cancel export";
         _model.Status = "Exporting the timeline…";
         _model.ExportStatus = "Exporting…";
-        _document?.Refresh();
+        _model.ExportMenuClass = "hidden";
+        ShowProgress("Exporting · 0%");
         _ = Task.Run(async () =>
         {
             Exception? failure = null;
-            try { await Session.DeliverAsync(cancellation.Token); }
+            try { await Session.ExportAsync(chosen, ProgressReporter("Exporting"), cancellation.Token); }
             catch (Exception exception) { failure = exception; }
             lock (_playbackSync)
             {
@@ -570,7 +932,8 @@ public sealed class RoughCutReviewApp : CupriApp
             cancellation.Dispose();
             Post(() =>
             {
-                _model.ExportLabel = ExportAction;
+                HideProgress();
+                ChooseExportFormat(chosen);
                 // The export's own outcome is shown beside the preview; the status line carries any failure.
                 Complete(failure is OperationCanceledException ? null : failure, seekAfter: false);
             });
@@ -979,11 +1342,17 @@ public sealed class RoughCutReviewApp : CupriApp
               <div class="launcher-card">
                 <div class="launcher-title">Open or create a project</div>
                 <div class="launcher-hint">{{OpenMessage}}</div>
-                <div class="recent-empty {{RecentEmptyClass}}">No projects opened yet on this computer.</div>
-                <div class="recent-list"><button class="recent-open" data-repeat="Recent" data-path="{{Path}}"><strong>{{Name}}</strong><span>{{Folder}}</span><small>{{ProjectId}}</small></button></div>
+                <div class="recent-empty {{RecentEmptyClass}} {{PickingHiddenClass}}">No projects opened yet on this computer.</div>
+                <div class="recent-list {{PickingHiddenClass}}"><button class="recent-open" data-repeat="Recent" data-path="{{Path}}"><strong>{{Name}}</strong><span>{{Folder}}</span><small>{{ProjectId}}</small></button></div>
                 <div class="launcher-url"><cupri-textfield value="{{OpenUrl}}" placeholder="https://… video URL, downloaded with its subtitles"></cupri-textfield><cupri-button class="new-url">Fetch</cupri-button></div>
-                <div class="launcher-actions {{BrowseClass}}"><cupri-button class="new-project" variant="ghost">New from a local video…</cupri-button><cupri-button class="browse" variant="ghost">Open a project…</cupri-button></div>
-                <div class="launcher-open"><cupri-textfield value="{{OpenPath}}" placeholder="Path to a project.json or a video"></cupri-textfield><cupri-button class="open-path" variant="ghost">Go</cupri-button></div>
+                <div class="formats {{FormatsClass}}">
+                  <div class="formats-head"><strong>{{FormatsTitle}}</strong><span>{{FormatsHint}}</span></div>
+                  <div class="formats-folder"><cupri-textfield value="{{EditFolder}}" placeholder="Folder to keep this edit in"></cupri-textfield><cupri-button class="choose-folder" variant="ghost">Choose…</cupri-button></div>
+                  <div class="formats-list {{FormatsListClass}}"><button class="format-pick" data-repeat="Formats" data-format="{{Id}}"><strong>{{Label}}</strong><span>{{Detail}}</span><small>{{Size}}</small></button></div>
+                </div>
+                <div class="progress {{ProgressClass}}"><div class="progress-track"><div class="progress-fill" style="{{ProgressFillStyle}}"></div></div><span class="progress-label">{{ProgressLabel}}</span><cupri-button class="cancel-work {{CancelClass}}" variant="ghost">Cancel</cupri-button></div>
+                <div class="launcher-actions {{BrowseClass}} {{PickingHiddenClass}}"><cupri-button class="new-project" variant="ghost">New from a local video…</cupri-button><cupri-button class="browse" variant="ghost">Open a project…</cupri-button></div>
+                <div class="launcher-open {{PickingHiddenClass}}"><cupri-textfield value="{{OpenPath}}" placeholder="Path to a project.json or a video"></cupri-textfield><cupri-button class="open-path" variant="ghost">Go</cupri-button></div>
               </div>
             </section>
             <section class="workspace {{WorkspaceClass}}">
@@ -991,7 +1360,9 @@ public sealed class RoughCutReviewApp : CupriApp
                 <div class="preview-card">
                   <div class="preview"><div class="preview-crop" style="{{PlaybackCropStyle}}"><cupri-video src="{{PlaybackUri}}" poster="{{PreviewDataUri}}" fit="{{PlaybackFit}}" style="{{PlaybackVideoStyle}}" label="Project timeline playback"></cupri-video></div></div>
                   <div class="transport {{TransportClass}}"><cupri-button class="transport-play" variant="ghost">{{TransportLabel}}</cupri-button><div class="transport-track" data-transport="seek"><div class="transport-fill" style="{{TransportFillStyle}}"></div><span class="transport-thumb" style="{{TransportThumbStyle}}"></span></div><span class="transport-time">{{TransportPosition}} / {{TransportDuration}}</span><cupri-button class="transport-mute" variant="ghost">{{TransportMuteLabel}}</cupri-button></div>
-                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button><cupri-button class="export">{{ExportLabel}}</cupri-button></div>
+                  <div class="preview-actions"><cupri-button class="exact-preview {{ExactClass}}" variant="ghost">Render exact preview</cupri-button><cupri-button class="export-choose" variant="ghost">Format…</cupri-button><cupri-button class="export">{{ExportLabel}}</cupri-button></div>
+                  <div class="export-menu {{ExportMenuClass}}"><button class="export-format {{CssClass}}" data-repeat="ExportFormats" data-format="{{Name}}"><strong>{{Label}}</strong><span>{{Detail}}</span></button></div>
+                  <div class="export-progress {{ProgressClass}}"><div class="progress-track"><div class="progress-fill" style="{{ProgressFillStyle}}"></div></div><span class="progress-label">{{ProgressLabel}}</span></div>
                   <div class="preview-meta"><strong>{{Selection}}</strong><span>{{Crop}}</span><span>{{PlaybackStatus}}</span></div>
                   <div class="export-meta">{{ExportStatus}}</div>
                 </div>
@@ -1037,9 +1408,9 @@ public sealed class RoughCutReviewApp : CupriApp
         .project { color:var(--muted); font-size:12px; margin-top:5px; } .actions { display:flex; gap:8px; align-items:center; }
         .status { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:11px; margin-right:8px; }
         .workspace { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; padding:14px; }
-        .workspace.hidden,.launcher.hidden,.actions .hidden,.recent-empty.hidden { display:none; }
+        .workspace.hidden,.launcher.hidden,.actions .hidden,.recent-empty.hidden,.recent-list.hidden,.launcher-open.hidden { display:none; }
         .launcher { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; padding:24px; }
-        .launcher-card { width:660px; height:470px; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 18px 16px; }
+        .launcher-card { width:660px; height:560px; overflow:hidden; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 18px 16px; }
         .launcher-title { font-size:17px; font-weight:bold; }
         .launcher-hint { color:var(--muted); font-size:12px; margin:6px 0 10px; }
         .recent-empty { color:var(--muted); font-size:12px; padding:8px 0; }
@@ -1061,6 +1432,27 @@ public sealed class RoughCutReviewApp : CupriApp
         .transport { display:grid; grid-template-columns:92px minmax(0,1fr) auto 92px; gap:10px; align-items:center; padding-top:10px; } .transport.hidden { display:none; }
         /* Buttons size to their cell, which would otherwise leave a squeezed track between two wide ones. */
         .transport cupri-button { box-sizing:border-box; min-width:0; width:92px; }
+        .formats { display:flex; flex-direction:column; gap:6px; padding-top:8px; } .formats.hidden { display:none; }
+        .formats-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+        .formats-head span { color:var(--muted); font-size:10px; }
+        .formats-folder { display:grid; grid-template-columns:minmax(0,1fr) 92px; gap:8px; align-items:center; }
+        .formats-list { height:272px; overflow:hidden; } .formats-list.hidden { display:none; }
+        .format-pick { display:grid; grid-template-columns:110px minmax(0,1fr) 92px; gap:8px; align-items:center; width:100%; height:26px; box-sizing:border-box; margin-bottom:8px; padding:0 10px; border:0; border-left:3px solid var(--accent); border-radius:6px; background:var(--panel2); text-align:left; cursor:pointer; color:inherit; }
+        .format-pick:hover { background:#263249; }
+        .format-pick strong { font-size:12px; }
+        .format-pick span,.format-pick small { color:var(--muted); font-size:10px; }
+        .format-pick small { text-align:right; }
+        .progress,.export-progress { display:flex; align-items:center; gap:8px; padding-top:8px; }
+        .progress.hidden,.export-progress.hidden { display:none; }
+        .progress .progress-track,.export-progress .progress-track { flex:1; }
+        .progress-label { color:var(--muted); font-size:10px; min-width:112px; text-align:right; }
+        .export-menu { display:flex; flex-direction:column; gap:4px; margin-top:6px; } .export-menu.hidden { display:none; }
+        .export-format { display:flex; flex-direction:column; gap:1px; width:100%; box-sizing:border-box; padding:6px 10px; border:0; border-left:3px solid var(--line); border-radius:6px; background:var(--panel2); text-align:left; cursor:pointer; color:inherit; }
+        .export-format:hover { background:#263249; }
+        .export-format.chosen { border-left-color:var(--accent); }
+        .export-format span { color:var(--muted); font-size:10px; }
+        .progress-track { position:relative; height:10px; border-radius:5px; background:#05070b; border:1px solid var(--line); overflow:hidden; }
+        .progress-fill { position:absolute; left:0; top:0; height:100%; border-radius:5px; background:var(--accent); }
         .transport-track { position:relative; height:10px; border-radius:5px; background:#05070b; border:1px solid var(--line); cursor:pointer; }
         .transport-fill { position:absolute; left:0; top:0; height:100%; border-radius:5px; background:var(--accent); }
         .transport-thumb { position:absolute; top:-3px; width:14px; height:14px; margin-left:-7px; border-radius:50%; border:2px solid #fff; box-sizing:border-box; background:var(--accent); }
@@ -1146,6 +1538,22 @@ public sealed partial class ReviewModel
     public string OpenPath { get; set; } = "";
     public string OpenUrl { get; set; } = "";
     public RecentRow[] Recent { get; set; } = [];
+    public string FormatsClass { get; set; } = "hidden";
+    /// Hides the other ways into a project while a rendition is being chosen, so the list cannot push them
+    /// out of the card.
+    public string PickingHiddenClass { get; set; } = "";
+    /// Hides the rendition list once one has been chosen, leaving the title, the folder and the progress.
+    public string FormatsListClass { get; set; } = "";
+    public string FormatsTitle { get; set; } = "";
+    public string FormatsHint { get; set; } = "";
+    public FormatRow[] Formats { get; set; } = [];
+    public string EditFolder { get; set; } = "";
+    public string ProgressClass { get; set; } = "hidden";
+    public string ProgressLabel { get; set; } = "";
+    public string ProgressFillStyle { get; set; } = "width:0%";
+    public string CancelClass { get; set; } = "hidden";
+    public string ExportMenuClass { get; set; } = "hidden";
+    public ExportFormatRow[] ExportFormats { get; set; } = [];
     public string CropEditorClass { get; set; } = "hidden";
     public string ClipEditorClass { get; set; } = "hidden";
     public string ClipSummary { get; set; } = "";
@@ -1171,6 +1579,8 @@ public sealed partial class ReviewModel
     public EvidenceRow[] Evidence { get; set; } = [];
 }
 
+[CupriBindable] public sealed partial class FormatRow { public string Id { get; set; } = ""; public string Label { get; set; } = ""; public string Detail { get; set; } = ""; public string Size { get; set; } = ""; }
+[CupriBindable] public sealed partial class ExportFormatRow { public string Name { get; set; } = ""; public string Label { get; set; } = ""; public string Detail { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class RecentRow { public string Path { get; set; } = ""; public string Name { get; set; } = ""; public string Folder { get; set; } = ""; public string ProjectId { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeakerRow { public string Id { get; set; } = ""; public string Label { get; set; } = ""; public string CssClass { get; set; } = ""; }
 [CupriBindable] public sealed partial class SpeechRow { public string Id { get; set; } = ""; public string Time { get; set; } = ""; public string Speaker { get; set; } = ""; public string Text { get; set; } = ""; public string Badge { get; set; } = ""; public string CssClass { get; set; } = ""; }

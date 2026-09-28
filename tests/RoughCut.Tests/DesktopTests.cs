@@ -324,6 +324,203 @@ internal static class DesktopTests
                 "An opened project still showed the launcher.");
         });
 
+        await check("An edit from a local video lands in one folder, copied in with progress", async () =>
+        {
+            var media = Path.Combine(root, "folder-edit-source.mkv");
+            File.Copy(Path.Combine(root, "export source.mkv"), media, overwrite: true);
+            var folder = Path.Combine(root, "folder-edits", "My Edit");
+            var fractions = new List<double>();
+            var session = await RoughCut.Desktop.DesktopReviewSession.CreateInFolderAsync(media, default, folder,
+                new Progress<double>(value => { lock (fractions) fractions.Add(value); }));
+
+            // Everything the edit needs is in the one folder: the project file and its own copy of the video.
+            Assert(session.ProjectPath == Path.Combine(folder, "project.json") && File.Exists(session.ProjectPath) &&
+                File.Exists(Path.Combine(folder, "folder-edit-source.mkv")),
+                "The edit folder does not hold both the project and its copy of the video.");
+            Assert(session.Project.Assets[0].Path == "folder-edit-source.mkv" &&
+                RoughCut.Core.ProjectValidator.IsPortablePath(session.Project.Assets[0].Path),
+                "The copied video is not referenced by a portable path beside the project.");
+            Assert(File.Exists(media), "Creating the edit moved the person's own video instead of copying it.");
+            for (var wait = 0; wait < 100; wait++)
+            {
+                lock (fractions) if (fractions.Count > 0 && Math.Abs(fractions[^1] - 1) < 1e-9) break;
+                await Task.Delay(20);
+            }
+            lock (fractions)
+                Assert(fractions.Count > 0 && Math.Abs(fractions[^1] - 1) < 1e-9,
+                    "Copying the video into the edit folder reported no progress.");
+            // A folder that is already an edit is refused rather than being written into twice.
+            await Throws<IOException>(() => RoughCut.Desktop.DesktopReviewSession.CreateInFolderAsync(media, default, folder));
+        });
+
+        await check("The rendition picker keeps its controls apart and inside the card", () =>
+        {
+            // A real source offers dozens of renditions, and the first build of this list took the whole card:
+            // the progress bar, its label and Cancel were then drawn on top of the rows. The card cannot lay
+            // one control over another, whatever the source offers.
+            int[] heights = [2160, 1440, 1080, 720, 480, 360, 240, 144, 96, 72];
+            string[] codecs = ["vp09.00.50.08", "av01.0.12M.08", "avc1.640028"];
+            var many = Enumerable.Range(0, 42).Select(index => new RoughCut.Application.SourceFormat(
+                    index.ToString(System.Globalization.CultureInfo.InvariantCulture), "mp4",
+                    index % 7 == 0 ? "audio" : "video", 1920, heights[index % heights.Length], 60,
+                    codecs[index % codecs.Length], index % 7 == 0 ? "opus" : "none",
+                    9000 - index * 100, 40L * 1024 * 1024))
+                .ToArray();
+            var offered = new RoughCut.Application.SourceFormatList(1, "https://example.test/many",
+                "A source with a long name that wraps across two lines in the card", 852, 512L * 1024 * 1024,
+                many, ["highest", "medium", "lowest"]);
+
+            var app = new RoughCut.Desktop.RoughCutReviewApp(null, null,
+                new RoughCut.Desktop.RecentProjects(Path.Combine(root, "picker-recent.json")));
+            using var document = app.CreateDocument();
+            app.OfferFormats("https://example.test/many", offered);
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            // Exactly the state a person saw: the list still showing while a download reports progress over
+            // it. The window now puts the list away once a rendition is chosen, but the card has to hold both
+            // at once regardless, because that is what a long list plus a progress row asks of it.
+            model.ProgressClass = "";
+            model.CancelClass = "";
+            model.ProgressLabel = "Downloading · 12%";
+            model.ProgressFillStyle = "width:12%";
+            document.Refresh();
+
+            using var dump = System.Text.Json.JsonDocument.Parse(document.DebugDump(1280, 800));
+            var card = FindNodeCore(dump.RootElement.GetProperty("tree"), "launcher-card");
+            Assert(card.ValueKind != System.Text.Json.JsonValueKind.Undefined, "The launcher card was not rendered.");
+            var cardBox = Box(card);
+
+            // Every control the card holds, as laid out. Text and the bar's own fill are skipped: a fill sits
+            // inside its track by design, and text sits inside the control that owns it.
+            var controls = new List<(string What, float[] Box)>();
+            Collect(card);
+            void Collect(System.Text.Json.JsonElement node)
+            {
+                if (node.TryGetProperty("class", out var classes) && node.TryGetProperty("box", out _))
+                {
+                    var names = (classes.GetString() ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (names.Any(name => name is "formats-head" or "formats-folder" or "format-pick" or
+                        "launcher-url" or "progress" or "launcher-actions" or "launcher-open" or "recent-list"))
+                    {
+                        var box = Box(node);
+                        if (box[2] > 1 && box[3] > 1) controls.Add((names[0], box));
+                    }
+                }
+                if (node.TryGetProperty("children", out var children))
+                    foreach (var child in children.EnumerateArray()) Collect(child);
+            }
+
+            var outside = controls.Where(control => control.What != "format-pick" &&
+                (control.Box[1] < cardBox[1] - 0.5f ||
+                 control.Box[1] + control.Box[3] > cardBox[1] + cardBox[3] + 0.5f)).ToArray();
+            Assert(outside.Length == 0,
+                $"A control fell outside the launcher card: {string.Join("; ", outside.Select(control => control.What))}");
+
+            var overlaps = new List<string>();
+            for (var first = 0; first < controls.Count; first++)
+                for (var second = first + 1; second < controls.Count; second++)
+                {
+                    var one = controls[first];
+                    var other = controls[second];
+                    var vertical = Math.Min(one.Box[1] + one.Box[3], other.Box[1] + other.Box[3]) -
+                        Math.Max(one.Box[1], other.Box[1]);
+                    var horizontal = Math.Min(one.Box[0] + one.Box[2], other.Box[0] + other.Box[2]) -
+                        Math.Max(one.Box[0], other.Box[0]);
+                    if (vertical > 0.5f && horizontal > 0.5f)
+                        overlaps.Add($"{one.What} over {other.What}");
+                }
+            Assert(overlaps.Count == 0, $"Launcher controls overlap: {string.Join("; ", overlaps)}");
+            return Task.CompletedTask;
+        });
+
+        await check("Cancelling a fetch stops it and leaves no half-made edit", async () =>
+        {
+            // The coordinator is what the Cancel button reaches, so it is exercised directly: a command that
+            // cannot finish on its own is started, cancelled, and has to end as cancelled.
+            var coordinator = new RoughCut.Desktop.DesktopWorkCoordinator();
+            Assert(!coordinator.CancelCommand(), "Cancelling with nothing running claimed to cancel something.");
+            var running = new TaskCompletionSource();
+            Exception? outcome = null;
+            var finished = new TaskCompletionSource();
+            Assert(coordinator.StartCancellableCommand(async token =>
+            {
+                running.TrySetResult();
+                await Task.Delay(Timeout.Infinite, token);
+            }, exception => { outcome = exception; finished.TrySetResult(); }),
+                "A cancellable command would not start.");
+            await running.Task;
+            Assert(coordinator.CancelCommand(), "The running command could not be cancelled.");
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert(outcome is OperationCanceledException,
+                $"A cancelled command reported {outcome?.GetType().Name ?? "success"} instead of cancellation.");
+
+            // And the work itself leaves nothing: a copy cancelled part way through takes its folder with it.
+            var media = Path.Combine(root, "cancel-source.mkv");
+            File.Copy(Path.Combine(root, "export source.mkv"), media, overwrite: true);
+            var folder = Path.Combine(root, "cancelled-edit");
+            using var cancellation = new CancellationTokenSource();
+            await Throws<OperationCanceledException>(() => RoughCut.Desktop.DesktopReviewSession.CreateInFolderAsync(
+                media, cancellation.Token, folder, new Progress<double>(_ => cancellation.Cancel())));
+            Assert(!Directory.Exists(folder), "A cancelled edit left its folder behind.");
+            Assert(File.Exists(media), "A cancelled edit removed the person's own video.");
+        });
+
+        await check("The window offers export formats and defaults to copying the source", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+
+            // Copying is the default, and the button says so before anything is chosen.
+            Assert(model.ExportLabel.Contains("Original", StringComparison.Ordinal) ||
+                model.ExportLabel == "Export MP4",
+                $"The export button does not name what it would produce: {model.ExportLabel}.");
+            Assert(model.ExportMenuClass == "hidden", "The format menu was open before it was asked for.");
+
+            var formats = await session.ListExportFormatsAsync();
+            Assert(formats.Options[0].Copy && formats.Options.Any(option => !option.Copy) &&
+                formats.Options.Count(option => option.Copy) >= 1,
+                "The window would offer no copy option, or no re-encoded one.");
+            Assert(formats.Options.All(option => option.Label.Length > 0 && option.Extension.StartsWith('.')),
+                "An offered format is unlabelled or has no extension.");
+        });
+
+        await check("The window follows an outside change to the project", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-follow-project.json");
+            File.Copy(Path.Combine(root, "desktop-timeline-project.json"), projectPath, overwrite: true);
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+            var model = (RoughCut.Desktop.ReviewModel)app.Model;
+            var started = session.Project.Revision;
+
+            // Exactly what an agent's edit over MCP looks like from here: a new revision on disk, written by
+            // somebody else. The window is expected to notice and follow it.
+            var store = new RoughCut.Core.ProjectStore();
+            var outside = await store.LoadAsync(projectPath);
+            await store.SaveAsync(projectPath, outside with
+            {
+                Revision = started + 1,
+                Timeline = [outside.Timeline[0] with { Out = outside.Timeline[0].In + 100 }]
+            }, started);
+
+            var followed = false;
+            for (var wait = 0; wait < 200 && !followed; wait++)
+            {
+                await Task.Delay(25);
+                // A live window applies posted changes on its next frame; a headless one is pumped here.
+                app.PumpPendingChanges();
+                document.Refresh();
+                followed = ((RoughCut.Desktop.ReviewModel)app.Model).Revision.Contains(
+                    (started + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            }
+            Assert(followed, $"The window did not follow an outside edit; it still shows revision {model.Revision}.");
+        });
+
         await check("New projects are created beside their video without overwriting", async () =>
         {
             var media = Path.Combine(root, "new-project-source.mkv");

@@ -26,8 +26,73 @@ public sealed class MediaReader(string ffmpeg = "ffmpeg", string ffprobe = "ffpr
     private const string Containers = "mov,matroska,webm,avi,mpegts,ogg,flv";
     private static readonly byte[] PngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
 
+    /// Indexes every frame of the source. Only for work that must name a particular frame — a frame-exact
+    /// render, or the strict export path's validation — because it walks the whole file: a fourteen-minute
+    /// 1080p60 source takes minutes and a long one exceeds the hundred-thousand-frame bound outright.
     public async Task<VideoInfo> InspectAsync(string path, CancellationToken cancellationToken = default)
         => (await IndexAsync(path, cancellationToken)).Info;
+
+    /// What a project needs to know about a source — codec, size, time base, where it starts and how long it
+    /// runs — read from the container rather than by walking its frames. Creating a project used to pay for a
+    /// full index and appear to hang for minutes after a download; this answers in about a second.
+    ///
+    /// The same guards as the index apply, because a source this cannot represent should be refused when it
+    /// is added rather than when it is first rendered.
+    public async Task<VideoInfo> ProbeAsync(string path, CancellationToken cancellationToken = default)
+    {
+        path = Path.GetFullPath(path);
+        if (!File.Exists(path)) throw new FileNotFoundException("Local media file does not exist.");
+        var fingerprint = await FingerprintAsync(path, cancellationToken);
+        var result = await ToolProcess.RunAsync(ffprobe,
+            ["-v", "error", "-protocol_whitelist", "file,pipe", "-format_whitelist", Containers,
+             "-select_streams", "V:0", "-show_streams", "-show_entries",
+             "stream=index,codec_name,width,height,time_base,start_pts,duration_ts,sample_aspect_ratio,color_transfer:stream_tags=rotate:stream_side_data=rotation:format=duration",
+             "-of", "json", "-i", path], timeout: TimeSpan.FromMinutes(5), cancellationToken: cancellationToken);
+        using var document = JsonDocument.Parse(result.Output);
+        var streams = document.RootElement.GetProperty("streams");
+        if (streams.GetArrayLength() != 1) throw new InvalidDataException("A usable video stream is required.");
+        var stream = streams[0];
+        var timeBase = Supported(stream);
+        var start = stream.TryGetProperty("start_pts", out var startPts) && startPts.TryGetInt64(out var startTicks)
+            ? startTicks : 0;
+        // A stream states its own length where the container records one; Matroska usually does not, so the
+        // container's duration in seconds is converted into the stream's own ticks. Flooring never claims
+        // material the file does not hold.
+        long duration;
+        if (stream.TryGetProperty("duration_ts", out var durationTs) && durationTs.TryGetInt64(out var ticks) && ticks > 0)
+            duration = ticks;
+        else if (document.RootElement.TryGetProperty("format", out var format) &&
+            format.TryGetProperty("duration", out var seconds) &&
+            double.TryParse(seconds.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var length) && length > 0)
+            duration = (long)(length * timeBase.Denominator / timeBase.Numerator);
+        else throw new InvalidDataException("The source does not state how long it is.");
+        if (duration <= 0) throw new InvalidDataException("The source states a length of zero.");
+        return new(fingerprint, stream.GetProperty("index").GetInt32(), stream.GetProperty("codec_name").GetString()!,
+            stream.GetProperty("width").GetInt32(), stream.GetProperty("height").GetInt32(), timeBase, start, duration,
+            // Frames are not counted here; work that needs a frame count indexes the source.
+            0);
+    }
+
+    /// The properties a source must have for RoughCut to represent it at all, and its time base.
+    private static TimeBase Supported(JsonElement stream)
+    {
+        var width = stream.GetProperty("width").GetInt32();
+        var height = stream.GetProperty("height").GetInt32();
+        if (width <= 0 || height <= 0 || (long)width * height > 33_177_600)
+            throw new InvalidDataException("Video dimensions exceed the initial slice's 8K pixel limit.");
+        if (stream.TryGetProperty("sample_aspect_ratio", out var sar) && sar.GetString() is not ("1:1" or "N/A" or "0:1"))
+            throw new NotSupportedException("Non-square pixels are not supported by this first frame-reader slice.");
+        if ((stream.TryGetProperty("side_data_list", out var sideData) && sideData.EnumerateArray().Any(s =>
+            s.TryGetProperty("rotation", out var rotation) && rotation.GetDouble() != 0)) ||
+            (stream.TryGetProperty("tags", out var tags) && tags.TryGetProperty("rotate", out var rotate) && rotate.GetString() != "0"))
+            throw new NotSupportedException("Rotated video is not supported by this first frame-reader slice.");
+        if (stream.TryGetProperty("color_transfer", out var transfer) && transfer.GetString() is "smpte2084" or "arib-std-b67")
+            throw new NotSupportedException("HDR tone mapping is not yet supported.");
+        var ratio = stream.GetProperty("time_base").GetString()!.Split('/');
+        var timeBase = new TimeBase(long.Parse(ratio[0], CultureInfo.InvariantCulture), long.Parse(ratio[1], CultureInfo.InvariantCulture));
+        if (!timeBase.IsValid) throw new InvalidDataException("Invalid stream time base.");
+        return timeBase;
+    }
 
     public async Task<FrameImage> GetFrameAsync(string path, FrameRequest request, CancellationToken cancellationToken = default)
     {
@@ -82,19 +147,7 @@ public sealed class MediaReader(string ffmpeg = "ffmpeg", string ffprobe = "ffpr
         var stream = streams[0];
         var width = stream.GetProperty("width").GetInt32();
         var height = stream.GetProperty("height").GetInt32();
-        if (width <= 0 || height <= 0 || (long)width * height > 33_177_600)
-            throw new InvalidDataException("Video dimensions exceed the initial slice's 8K pixel limit.");
-        if (stream.TryGetProperty("sample_aspect_ratio", out var sar) && sar.GetString() is not ("1:1" or "N/A" or "0:1"))
-            throw new NotSupportedException("Non-square pixels are not supported by this first frame-reader slice.");
-        if ((stream.TryGetProperty("side_data_list", out var sideData) && sideData.EnumerateArray().Any(s =>
-            s.TryGetProperty("rotation", out var rotation) && rotation.GetDouble() != 0)) ||
-            (stream.TryGetProperty("tags", out var tags) && tags.TryGetProperty("rotate", out var rotate) && rotate.GetString() != "0"))
-            throw new NotSupportedException("Rotated video is not supported by this first frame-reader slice.");
-        if (stream.TryGetProperty("color_transfer", out var transfer) && transfer.GetString() is "smpte2084" or "arib-std-b67")
-            throw new NotSupportedException("HDR tone mapping is not yet supported.");
-        var ratio = stream.GetProperty("time_base").GetString()!.Split('/');
-        var timeBase = new TimeBase(long.Parse(ratio[0], CultureInfo.InvariantCulture), long.Parse(ratio[1], CultureInfo.InvariantCulture));
-        if (!timeBase.IsValid) throw new InvalidDataException("Invalid stream time base.");
+        var timeBase = Supported(stream);
         var frames = document.RootElement.GetProperty("frames");
         if (frames.GetArrayLength() is 0 or > 100_000)
             throw new NotSupportedException("Frame index must contain 1 to 100,000 frames in this slice.");

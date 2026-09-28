@@ -9,13 +9,17 @@ public sealed record ExportJob(
     DateTimeOffset? StartedUtc, DateTimeOffset? FinishedUtc, int ProgressPercent,
     string ProjectPath, string OutputDirectory, bool AllowEncoding, string? Message,
     // Absent in checkpoints written before delivery existed, which read back as the strict path they used.
-    string Mode = "strict", string Container = "mkv");
+    // `Container` is the container a mux copies into; `Format` is the delivery target's name. Both default
+    // to what their path produced before either could be chosen, so an older checkpoint stays truthful.
+    string Mode = "strict", string Container = "mkv", string Format = "mp4");
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(ExportJob))]
 [JsonSerializable(typeof(AcquisitionResult))]
 [JsonSerializable(typeof(SourceFormatList))]
 [JsonSerializable(typeof(UrlProjectResult))]
+[JsonSerializable(typeof(ExportFormatList))]
+[JsonSerializable(typeof(FolderProjectResult))]
 public partial class ApplicationJson : JsonSerializerContext;
 
 public sealed class ExportJobManager : IDisposable
@@ -42,11 +46,14 @@ public sealed class ExportJobManager : IDisposable
     }
 
     public ExportJob Start(string projectPath, string outputDirectory, bool allowEncoding, string mode = "strict",
-        string container = "mkv")
+        string container = "mkv", string format = "mp4")
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (mode is not ("strict" or "delivery" or "mux")) throw new ArgumentException("Export mode must be strict, delivery or mux.");
         if (container is not ("mkv" or "mp4")) throw new ArgumentException("Container must be mkv or mp4.");
+        // Rejected here rather than inside the worker, so an unknown format fails the caller's own call
+        // instead of appearing minutes later as a failed job.
+        var target = DeliveryTarget.Parse(format);
         _workspace.Resolve(projectPath);
         var output = _workspace.Resolve(outputDirectory, mustExist: false);
         if (File.Exists(output) || Directory.Exists(output)) throw new IOException("Output destination already exists.");
@@ -55,7 +62,7 @@ public sealed class ExportJobManager : IDisposable
             if (_jobs.Count >= MaxJobs) throw new InvalidOperationException("Job retention limit reached; remove completed checkpoints before starting more work.");
             var job = new ExportJob(1, Guid.NewGuid().ToString("N"), "queued", DateTimeOffset.UtcNow,
                 null, null, 0, Normalize(projectPath), Normalize(outputDirectory), allowEncoding,
-                "Waiting for the export worker.", mode, container);
+                "Waiting for the export worker.", mode, container, target.Name);
             var cancellation = new CancellationTokenSource();
             _jobs.Add(job.JobId, job);
             _cancellations.Add(job.JobId, cancellation);
@@ -100,15 +107,30 @@ public sealed class ExportJobManager : IDisposable
                     ProgressPercent = 10,
                     Message = current.Mode switch
                     {
-                        "delivery" => "Re-encoding the requested timeline into a delivery file.",
+                        "delivery" => $"Re-encoding the requested timeline into {DeliveryTarget.Parse(current.Format).Label}.",
                         "mux" => "Copying the retained timeline into a new container.",
                         _ => "Exporting and validating the requested timeline."
                     }
                 });
                 var projectPath = _workspace.Resolve(job.ProjectPath);
                 var destination = _workspace.Resolve(job.OutputDirectory, mustExist: false);
-                if (job.Mode == "delivery") await new DeliveryExporter(_ffmpeg, _ffprobe).ExportAsync(projectPath, destination, token);
-                else if (job.Mode == "mux") await new MuxExporter(_ffmpeg, _ffprobe).ExportAsync(projectPath, destination, job.Container, token);
+                // The media tool's own reported position, mapped into the band between starting and the
+                // checks that follow, so a reader never sees 100% while validation is still to come. Each
+                // checkpoint is a file write and the tool reports twice a second, so only a changed whole
+                // percent is recorded — the number a reader can act on, and nothing finer.
+                var lastPercent = 10;
+                var reported = new Progress<double>(fraction =>
+                {
+                    var percent = 10 + (int)(fraction * 85);
+                    if (percent <= lastPercent) return;
+                    lastPercent = percent;
+                    Update(jobId, current => current.Status == "running"
+                        ? current with { ProgressPercent = percent } : current);
+                });
+                if (job.Mode == "delivery") await new DeliveryExporter(_ffmpeg, _ffprobe)
+                    .ExportAsync(projectPath, destination, token, DeliveryTarget.Parse(job.Format), reported);
+                else if (job.Mode == "mux") await new MuxExporter(_ffmpeg, _ffprobe)
+                    .ExportAsync(projectPath, destination, job.Container, token, reported);
                 else await new ExportEngine(_ffmpeg, _ffprobe).ExportAsync(projectPath, destination, job.AllowEncoding, token);
                 Update(jobId, current => current with
                 {

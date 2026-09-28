@@ -26,5 +26,7 @@
 | [0022](0022-stream-copy-mux-export.md) | 2026-09-27 | Accepted for the fast-export slice | Stream-copy export whose starts snap to source keyframes and whose plan states the offset; bounded anchor reading so the caller chooses copy or re-encode |
 | [0023](0023-measurement-inside-roughcut.md) | 2026-09-27 | Accepted as a boundary for every future analysis feature | Whatever a caller must measure to decide an edit is a RoughCut tool returning numbers, not a verdict |
 | [0024](0024-overlapping-transcription-windows.md) | 2026-09-27 | Accepted for local transcription | Each chunk hears three seconds of what precedes it and discards what it reports there, so a boundary stops inventing speech; amends 0006 and 0007 |
+| [0025](0025-one-edit-one-folder.md) | 2026-09-27 | Accepted for the desktop and MCP project-creation paths | One edit is one directory holding its media, project file and assets; a local video is copied in, never moved |
+| [0026](0026-the-window-needs-no-agent.md) | 2026-09-27 | Accepted for the desktop review window | The window picks the rendition, names the folder, shows real progress from the tools, offers every export format with a copy as the default, and follows an outside edit |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

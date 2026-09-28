@@ -56,7 +56,7 @@ public sealed class DesktopPlaybackProxyBuilder(string ffmpeg = "ffmpeg", string
         double durationSeconds, CancellationToken token)
     {
         var result = ValidateCached(path, plan, durationSeconds);
-        var info = await new MediaReader(ffmpeg, ffprobe).InspectAsync(path, token);
+        var info = await new MediaReader(ffmpeg, ffprobe).ProbeAsync(path, token);
         var actualDuration = Seconds(info.DurationTicks, info.TimeBase);
         if (info.Codec != "vp9" || info.Width != plan.Width || info.Height != plan.Height ||
             Math.Abs(actualDuration - durationSeconds) > 0.050)

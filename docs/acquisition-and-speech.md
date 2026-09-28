@@ -22,6 +22,8 @@ dotnet run --project src/RoughCut.Cli -- create-url https://example.com/video ar
 
 `formats` reports what the source offers — identifier, extension, codecs, resolution, bitrate and size where the site states it — and `roughcut_list_source_formats` returns the same list. The caller then names a format identifier, two joined by `+`, or one of three policies: `highest`, `medium` or `lowest` by bitrate. `medium` is the default, because the largest rendition of an ordinary music video does not fit the 512 MiB media bound and the smallest is not worth cutting.
 
+A picture-only rendition asked for on its own is refused, naming the pairing it needs: a silent download is far more likely a mistake than a request. A caller offering a list to a person pairs it first with `SourceFormatPolicy.WithAudio`, which is what the review window does.
+
 A policy only ever chooses a rendition that fits that bound, and a rendition that cannot fit is refused before anything is downloaded rather than aborting part-way through. That failure is what made this necessary: the default selection took a 604 MiB 4K AV1 rendition, hit the cap mid-download, and left a `.part` file beside the audio — which acquisition then reported as "Sequence contains more than one matching element". A partial download is now named as one, and more than one candidate media file lists what it found.
 
 ### JavaScript runtime
