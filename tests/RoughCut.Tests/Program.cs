@@ -254,6 +254,58 @@ await Check("Caption selection records quality provenance and allows explicit ov
         "Explicit caption override was not persisted.");
     await Throws<RevisionConflictException>(() => operations.SelectCaptionsAsync("caption-selection.json", "video", candidates, 2, "en"));
 });
+await Check("What to offer and what a chosen name means are the shared library's to decide", () =>
+{
+    // These were the review window's own, which meant a second interface — or an agent summarising the
+    // choice — would have had to reinvent them. They belong beside the list they present.
+    int[] heights = [2160, 1440, 1080, 720, 480, 360, 240, 144, 96];
+    string[] codecs = ["vp09.00.50.08", "av01.0.12M.08", "avc1.640028"];
+    var many = Enumerable.Range(0, 40).Select(index => new SourceFormat(
+            index.ToString(System.Globalization.CultureInfo.InvariantCulture), "mp4",
+            index % 7 == 0 ? "audio" : "video", 1920, heights[index % heights.Length], 60,
+            codecs[index % codecs.Length], index % 7 == 0 ? "opus" : "none", 9000 - index * 100,
+            (index + 1) * 1024L * 1024)).ToArray();
+    var offered = new SourceFormatList(1, "https://example.test/many", "Fixture", 852,
+        512L * 1024 * 1024, many, ["highest", "medium", "lowest"]);
+
+    var best = SourceFormatPresentation.BestOfEachSize(offered);
+    Assert(best.Count == SourceFormatPresentation.DefaultLimit &&
+        best.Select(format => format.Height).SequenceEqual(new[] { 2160, 1440, 1080, 720, 480, 360, 240, 144 }),
+        "The offered sizes are wrong or out of order.");
+    Assert(best.Select(format => format.Height).Distinct().Count() == best.Count,
+        "A size was offered more than once.");
+    Assert(best.All(format => format.Kind != "audio"), "An audio-only rendition was offered as a picture.");
+    Assert(SourceFormatPresentation.SizeCount(offered) == 9, "The count of sizes a source carries is wrong.");
+    Assert(SourceFormatPresentation.BestOfEachSize(offered, 3).Count == 3, "The limit was ignored.");
+    // H.264 wins a size it shares, because it plays everywhere and can be copied into an MP4.
+    var shared = new SourceFormatList(1, "https://example.test/one", "Fixture", 10, 512L * 1024 * 1024,
+        [new("a", "webm", "video", 1920, 1080, 60, "vp09.00.50.08", "none", 9000, 10),
+         new("b", "mp4", "video", 1920, 1080, 60, "avc1.640028", "none", 8000, 20),
+         new("c", "mp4", "video", 1920, 1080, 60, "av01.0.12M.08", "none", 7000, 30)], []);
+    Assert(SourceFormatPresentation.BestOfEachSize(shared).Single().Id == "b",
+        "A size shared between codecs did not prefer the one that plays everywhere.");
+    Assert(SourceFormatPresentation.CodecName("avc1.4d4020") == "H.264" &&
+        SourceFormatPresentation.CodecName("av01.0.12M.08") == "AV1" &&
+        SourceFormatPresentation.CodecName("vp09.00.50.08") == "VP9" &&
+        SourceFormatPresentation.CodecName("mp4a.40.2") == "AAC" &&
+        SourceFormatPresentation.CodecName("something-new") == "something-new",
+        "A codec is named wrongly, or an unknown one was guessed at.");
+
+    // A name read from the published list always resolves to the exporter that can act on it.
+    Assert(ExportFormats.Resolve(null) is { Copy: true, Container: "mkv" } &&
+        ExportFormats.Resolve("original-mp4") is { Copy: true, Container: "mp4" } &&
+        ExportFormats.Resolve("webm") is { Copy: false, Container: "webm" } &&
+        ExportFormats.Resolve("mov")!.Target!.VideoCodec == "h264",
+        "An export format name does not resolve to the exporter that produces it.");
+    Assert(ExportFormats.Resolve("original-mkv").FileName == "video.mkv" &&
+        ExportFormats.Resolve("webm").FileName == "video.webm",
+        "A resolved format names the wrong file.");
+    Assert(Caught<ArgumentOutOfRangeException>(() => ExportFormats.Resolve("original-avi")) is not null &&
+        Caught<ArgumentOutOfRangeException>(() => ExportFormats.Resolve("avi")) is not null,
+        "A format nobody offers was accepted.");
+    return Task.CompletedTask;
+});
+
 await Check("An edit folder is named from the video and copied into safely", async () =>
 {
     Assert(ProjectFolder.NameFrom("Fixture: Part 2 <HD> | 4K?") == "Fixture Part 2 HD 4K" &&

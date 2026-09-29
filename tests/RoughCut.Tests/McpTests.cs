@@ -19,8 +19,71 @@ internal static class McpTests
         var server = Path.GetFullPath(args[option + 1]);
         var command = server.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? "dotnet" : server;
         var arguments = server.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-            ? new[] { server, "--workspace", root }
-            : new[] { "--workspace", root };
+            ? new[] { server, "--stdio", "--workspace", root }
+            : new[] { "--stdio", "--workspace", root };
+
+        await check("The server answers the hub over HTTP with a health payload it can act on", async () =>
+        {
+            // What MCPHub manages: a process on its own port, a /healthz it can probe, and MCP at /mcp. The
+            // port comes from the command line so this check cannot collide with a server already running on
+            // the registered one.
+            var port = 5722 + 400;
+            var httpArguments = arguments.Where(argument => argument != "--stdio")
+                .Concat([$"--Server:Port={port.ToString(System.Globalization.CultureInfo.InvariantCulture)}"]).ToArray();
+            var startInfo = new System.Diagnostics.ProcessStartInfo(command)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            foreach (var argument in httpArguments) startInfo.ArgumentList.Add(argument);
+            using var process = System.Diagnostics.Process.Start(startInfo)!;
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                System.Text.Json.JsonDocument? health = null;
+                for (var attempt = 0; attempt < 100 && health is null; attempt++)
+                {
+                    await Task.Delay(200);
+                    if (process.HasExited)
+                        throw new InvalidOperationException("The HTTP server exited: " + await process.StandardError.ReadToEndAsync());
+                    try
+                    {
+                        var body = await client.GetStringAsync($"http://127.0.0.1:{port}/healthz");
+                        health = System.Text.Json.JsonDocument.Parse(body);
+                    }
+                    catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException) { }
+                }
+                Assert(health is not null, "The server never answered /healthz.");
+                var payload = health!.RootElement;
+                Assert(payload.GetProperty("status").GetString() == "ok" &&
+                    payload.GetProperty("server").GetString() == "RoughCutMCPSharp",
+                    "The health payload does not identify a healthy RoughCut server.");
+                // The fields a hub can act on: a server that answers but cannot reach its media tools is a
+                // different problem from one that is down, and says so.
+                Assert(payload.TryGetProperty("workspace", out _) && payload.TryGetProperty("workspaceExists", out _) &&
+                    payload.TryGetProperty("ffmpeg", out _) && payload.TryGetProperty("speechModel", out _),
+                    "The health payload omits what the server needs to be useful.");
+
+                using var request = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{port}/mcp")
+                {
+                    Content = new StringContent(
+                        """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"suite","version":"1"}}}""",
+                        System.Text.Encoding.UTF8, "application/json")
+                };
+                request.Headers.Accept.ParseAdd("application/json, text/event-stream");
+                var response = await client.SendAsync(request);
+                var text = await response.Content.ReadAsStringAsync();
+                Assert(response.IsSuccessStatusCode && text.Contains("\"protocolVersion\"", StringComparison.Ordinal) &&
+                    text.Contains("roughcut-mcp", StringComparison.Ordinal),
+                    $"The MCP endpoint did not complete a handshake: {text[..Math.Min(200, text.Length)]}");
+            }
+            finally
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
+            }
+        });
 
         await check("MCP stdio lists the bounded RoughCut tool surface", async () =>
         {

@@ -1,0 +1,16 @@
+{
+  "Server": {
+    "Host": "localhost",
+    "Port": 5722,
+    "Path": "/mcp",
+    "WindowsServiceName": "RoughCutMCPSharp",
+    "Password": ""
+  },
+  "RoughCut": {
+    "// Workspace": "Everything this server may touch. --workspace and ROUGHCUT_WORKSPACE override it.",
+    "Workspace": ""
+  },
+  "Logging": {
+    "MinimumLevel": "Information"
+  }
+}

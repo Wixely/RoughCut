@@ -444,21 +444,20 @@ public sealed class RoughCutReviewApp : CupriApp
         _model.PickingHiddenClass = "hidden";
         _model.FormatsListClass = "";
         _model.FormatsTitle = offered.Title;
-        var sizes = offered.Formats.Where(format => format.Kind is "video" or "muxed" && format.Height > 0)
-            .Select(format => format.Height).Distinct().Count();
+        var sizes = SourceFormatPresentation.SizeCount(offered);
         _model.FormatsHint = FormattableString.Invariant(
             $"{offered.DurationSeconds / 60:0.0} min · best of {offered.Formats.Length}") +
             (sizes > VisibleFormats ? FormattableString.Invariant($", largest {VisibleFormats} sizes") : "") +
             FormattableString.Invariant($" · max {offered.MaxBytes / 1024d / 1024d:0} MiB");
-        _model.Formats = BestOfEachSize(offered)
+        _model.Formats = SourceFormatPresentation.BestOfEachSize(offered, VisibleFormats)
             .Select(format => new FormatRow
             {
                 Id = format.Id,
                 Label = format.Kind switch
                 {
-                    "muxed" => FormattableString.Invariant($"{format.Height}p · {CodecName(format.VideoCodec)} + {CodecName(format.AudioCodec)}"),
-                    "audio" => FormattableString.Invariant($"Audio only · {CodecName(format.AudioCodec)}"),
-                    _ => FormattableString.Invariant($"{format.Height}p · {CodecName(format.VideoCodec)}")
+                    "muxed" => FormattableString.Invariant($"{format.Height}p · {SourceFormatPresentation.CodecName(format.VideoCodec)} + {SourceFormatPresentation.CodecName(format.AudioCodec)}"),
+                    "audio" => FormattableString.Invariant($"Audio only · {SourceFormatPresentation.CodecName(format.AudioCodec)}"),
+                    _ => FormattableString.Invariant($"{format.Height}p · {SourceFormatPresentation.CodecName(format.VideoCodec)}")
                 },
                 Detail = FormattableString.Invariant(
                         $"{format.Id} · {format.Extension}{(format.Fps > 0 ? FormattableString.Invariant($" · {format.Fps:0.#} fps") : "")}") +
@@ -475,42 +474,9 @@ public sealed class RoughCutReviewApp : CupriApp
         _document?.Refresh();
     }
 
-    /// The name a codec is known by, from the profile string a source reports it as. An unrecognised codec
-    /// keeps its own name rather than being guessed at.
-    private static string CodecName(string codec) => codec switch
-    {
-        _ when codec.StartsWith("avc", StringComparison.OrdinalIgnoreCase) => "H.264",
-        _ when codec.StartsWith("av0", StringComparison.OrdinalIgnoreCase) => "AV1",
-        _ when codec.StartsWith("vp9", StringComparison.OrdinalIgnoreCase) ||
-               codec.StartsWith("vp09", StringComparison.OrdinalIgnoreCase) => "VP9",
-        _ when codec.StartsWith("vp8", StringComparison.OrdinalIgnoreCase) => "VP8",
-        _ when codec.StartsWith("hev", StringComparison.OrdinalIgnoreCase) ||
-               codec.StartsWith("hvc", StringComparison.OrdinalIgnoreCase) => "HEVC",
-        _ when codec.StartsWith("mp4a", StringComparison.OrdinalIgnoreCase) => "AAC",
-        _ => codec
-    };
-
     /// How many renditions the card can show without laying one over another. The list has room for this
     /// many rows and no more; the rest are counted in the hint rather than drawn where they cannot be seen.
     private const int VisibleFormats = 8;
-
-    /// One rendition per picture size, largest first. A source offers the same size several times over in
-    /// different codecs, which is a distinction a person picking a quality does not want to make: H.264 is
-    /// preferred where it exists because it plays everywhere and can be copied into an MP4, then AV1, then
-    /// VP9, and a declared size breaks any remaining tie. Audio-only renditions are not offered, because
-    /// picking one would produce an edit with no picture.
-    private static IEnumerable<SourceFormat> BestOfEachSize(SourceFormatList offered) =>
-        offered.Formats
-            .Where(format => format.Kind is "video" or "muxed" && format.Height > 0)
-            .GroupBy(format => format.Height)
-            .OrderByDescending(group => group.Key)
-            .Select(group => group
-                .OrderBy(format => format.VideoCodec.StartsWith("avc", StringComparison.OrdinalIgnoreCase) ? 0
-                    : format.VideoCodec.StartsWith("av0", StringComparison.OrdinalIgnoreCase) ? 1 : 2)
-                .ThenByDescending(format => format.Bytes > 0)
-                .ThenBy(format => format.Bytes)
-                .First())
-            .Take(VisibleFormats);
 
     private void HideFormats()
     {

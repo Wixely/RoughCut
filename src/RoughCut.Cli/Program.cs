@@ -328,19 +328,12 @@ try
             break;
         case ["create", var source, var destination]:
             {
-                var relative = Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(destination))!, Path.GetFullPath(source)).Replace('\\', '/');
-                if (!ProjectValidator.IsPortablePath(relative))
-                    throw new ArgumentException("Keep the source inside the project directory (for example media/source.mp4).");
                 if (Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
                     throw new ArgumentException("Project destination must differ from source media.");
-                var info = await media.ProbeAsync(source, token);
-                var project = new EditProject
-                {
-                    TimeBase = info.TimeBase,
-                    Assets = [new("source-1", "video", relative, info.Sha256, info.DurationTicks, info.Width, info.Height, "application/octet-stream")],
-                    Timeline = [new("clip-1", "source-1", 0, info.DurationTicks)]
-                };
-                await store.SaveAsync(destination, project, 0, token);
+                var root = Path.GetDirectoryName(Path.GetFullPath(destination))!;
+                var project = await new RoughCutOperations(new WorkspaceBoundary(root), ffmpeg, ffprobe)
+                    .CreateProjectAsync(Path.GetRelativePath(root, Path.GetFullPath(source)).Replace('\\', '/'),
+                        Path.GetFileName(destination), token);
                 Console.WriteLine(JsonSerializer.Serialize(project, ProjectJson.Default.EditProject));
                 break;
             }

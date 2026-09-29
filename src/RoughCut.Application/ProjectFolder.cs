@@ -9,6 +9,13 @@ public static partial class ProjectFolder
 {
     public const string DefaultProjectFileName = "project.json";
 
+    /// Where edits are kept when a caller does not say. `ROUGHCUT_PROJECTS` overrides it; otherwise this is
+    /// the videos folder, because that is where a person looks for video they made.
+    public static string Root =>
+        Environment.GetEnvironmentVariable("ROUGHCUT_PROJECTS") is { Length: > 0 } configured
+            ? Path.GetFullPath(configured)
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RoughCut");
+
     /// How much is read and written at a time while copying. Large enough that a big file is not spent in
     /// syscalls, small enough that progress moves visibly and cancellation is noticed promptly.
     private const int CopyBufferBytes = 1024 * 1024;

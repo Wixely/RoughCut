@@ -4,15 +4,32 @@
 - Review: When the MCP SDK, tool contracts, workspace policy or job schema changes
 - Owner: Implementation agent
 
-RoughCut includes a local stdio MCP host over the same project, media and export libraries as the CLI. It uses `ModelContextProtocol` 1.4.0 and requires one explicit workspace root. Tool paths are relative to that root; absolute paths, `..`, missing inputs and reparse points are rejected. No MCP server was installed, registered or connected globally.
+`roughcut-mcp` is one of the two artefacts RoughCut ships; [packaging](packaging.md) covers building it and registering it with an MCP hub, and what it shares with the desktop window.
 
-Run the host directly:
+RoughCut includes a local MCP host over the same project, media and export libraries as the CLI. It requires one explicit workspace root: tool paths are relative to that root, and absolute paths, `..`, missing inputs and reparse points are rejected.
+
+It serves **two transports**, because it has two kinds of caller:
 
 ```powershell
+# What MCPHub manages: HTTP on the registered port, with /healthz to probe.
 dotnet run --project src/RoughCut.Mcp -- --workspace artifacts/mcp-workspace
+
+# What a client launches and owns, and what this repository's own checks use.
+dotnet run --project src/RoughCut.Mcp -- --stdio --workspace artifacts/mcp-workspace
 ```
 
-`ROUGHCUT_WORKSPACE` can supply the root. External executables resolve through the shared order described in the [development guide](development.md): environment variables, then a tools settings file, then `PATH`, so yt-dlp, FFmpeg, FFprobe and Deno need not be on `PATH`. Standard output is reserved for MCP messages.
+The HTTP host is [DnaX.MCPFab](packaging.md#the-estates-shared-host), the shared host every server in this estate runs on: the configuration chain, Kestrel binding, Windows service detection, Serilog, authentication, `/healthz`, the startup banner and the shutdown path all come from it, so this server behaves like its siblings rather than inventing its own version of each. It listens on **port 5722** by default — the estate's registry assigns 5700 through 5721 to other servers — at `/mcp`, and answers `/healthz` with what a hub can act on:
+
+```json
+{ "workspace": "...", "workspaceExists": true, "ffmpeg": true, "ffprobe": true,
+  "ytDlp": true, "speechModel": true, "status": "ok", "server": "RoughCutMCPSharp" }
+```
+
+A server that answers but cannot reach FFmpeg is a different problem from one that is down, and the payload says which.
+
+Settings live in `RoughCutMCPSharp.json` beside the executable, overridden by `ROUGHCUTMCP_`-prefixed environment variables and then the command line — `--Server:Port=5999` moves the port for one run. The prefix is deliberately not `ROUGHCUT_`: that already names this project's tool locations, which are read directly rather than through the configuration chain.
+
+`ROUGHCUT_WORKSPACE`, or `RoughCut:Workspace` in the configuration file, can supply the root instead of the argument. External executables resolve through the shared order described in the [development guide](development.md): environment variables, then a tools settings file, then `PATH`, so yt-dlp, FFmpeg, FFprobe and Deno need not be on `PATH`. Standard output is reserved for MCP messages.
 
 Set `ROUGHCUT_QWEN_ENDPOINT` to an absolute loopback service root to enable live synthesis, for example `http://127.0.0.1:8080/`. `ROUGHCUT_QWEN_API_KEY` is optional and `ROUGHCUT_QWEN_TIMEOUT_SECONDS` defaults to 600. Non-loopback endpoints are rejected so enabling this tool cannot silently disclose text to a remote service.
 

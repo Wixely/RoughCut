@@ -4,11 +4,32 @@
     <AssemblyName>roughcut-mcp</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <!-- MCPFab hosts over Kestrel, so this server needs the web framework the others do. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../RoughCut.Application/RoughCut.Application.csproj" />
     <ProjectReference Include="../RoughCut.Speech.Whisper/RoughCut.Speech.Whisper.csproj" />
     <ProjectReference Include="../RoughCut.Speech.Sherpa/RoughCut.Speech.Sherpa.csproj" />
     <ProjectReference Include="../RoughCut.Diarization.Cli/RoughCut.Diarization.Cli.csproj" />
-    <PackageReference Include="ModelContextProtocol" Version="[1.4.0]" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="[10.0.9]" />
+    <!--
+      The shared host every MCPSharp server in the estate runs on: the configuration chain, Kestrel
+      binding, Windows service detection, Serilog, authentication, /healthz, the banner and the shutdown
+      path. It brings the MCP SDK and the generic host with it, so neither is referenced here.
+
+      It resolves from the authenticated Wixely feed named in NuGet.config. A contributor without those
+      credentials can still restore and build everything else in this repository; only this project needs
+      the token.
+    -->
+    <PackageReference Include="DnaX.MCPFab" Version="[10.0.0-alpha.12]" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The server's own settings travel with the executable, as they do for every other server. -->
+    <None Update="RoughCutMCPSharp.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
 </Project>

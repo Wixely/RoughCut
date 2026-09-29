@@ -26,7 +26,9 @@ A lock file is per framework **and runtime identifier**, which matters the momen
 
 ## Managed packages
 
-Nine direct references, resolving to 83 packages in total. Every one carries a permissive licence, which the report asserts: MIT for 69, Apache-2.0 for 12, Zlib for 2.
+Nine direct references, resolving to 76 packages in total. Every one carries a permissive licence, which the report asserts: MIT for 45, Apache-2.0 for 27, Zlib for 2, and two whose MIT terms arrive as a licence file rather than an expression.
+
+One of them, `DnaX.MCPFab`, comes from an authenticated feed rather than nuget.org: it is the host every server in this MCP estate shares, and only the MCP server project references it. Everything else resolves publicly, so a contributor without those credentials can still restore, build and run the libraries, the command line and the desktop window. See [packaging](packaging.md#the-estates-shared-host).
 
 | Direct package | Version | Licence | Used for |
 | --- | --- | --- | --- |

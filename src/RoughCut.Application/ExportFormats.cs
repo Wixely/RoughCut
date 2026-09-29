@@ -13,3 +13,32 @@ public sealed record ExportFormatOption(string Name, string Label, string Extens
 /// What a caller may offer for one project, in the order it should be offered: copies first, because keeping
 /// the source's own packets is the cheapest answer and the right default for a cut-down.
 public sealed record ExportFormatList(int SchemaVersion, long Revision, ExportFormatOption[] Options);
+
+/// Which exporter a format name means. `Copy` names the mux path, whose cuts land on the source's keyframes;
+/// otherwise `Target` names the delivery format, whose cuts land exactly.
+public sealed record ExportFormatChoice(bool Copy, string Container, DeliveryTarget? Target)
+{
+    /// The file a bundle of this kind holds, so a caller need not rebuild the name from the format.
+    public string FileName => Copy ? "video." + Container : Target!.FileName;
+}
+
+/// Resolving the names `ListExportFormatsAsync` publishes. Kept beside that list so the two cannot disagree:
+/// an interface offering a name it read from there can always act on it.
+public static class ExportFormats
+{
+    public const string DefaultCopyName = "original-mkv";
+
+    public static ExportFormatChoice Resolve(string? name)
+    {
+        var chosen = string.IsNullOrWhiteSpace(name) ? DefaultCopyName : name.Trim();
+        if (!chosen.StartsWith("original-", StringComparison.Ordinal))
+            return new(false, DeliveryTarget.Parse(chosen).Container, DeliveryTarget.Parse(chosen));
+        var container = chosen["original-".Length..];
+        // Matroska takes any codec; MP4 is offered only where the source's codecs belong in one, which the
+        // published list decides. Anything else was never offered and is refused by name.
+        if (container is not ("mkv" or "mp4"))
+            throw new ArgumentOutOfRangeException(nameof(name),
+                $"Unknown export format '{name}'. Copies are original-mkv and original-mp4.");
+        return new(true, container, null);
+    }
+}

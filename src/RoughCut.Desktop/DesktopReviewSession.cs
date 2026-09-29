@@ -37,11 +37,9 @@ public sealed class DesktopReviewSession
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
 
-    /// Where projects downloaded from a URL are written. `ROUGHCUT_PROJECTS` overrides it.
-    public static string ProjectsRoot =>
-        Environment.GetEnvironmentVariable("ROUGHCUT_PROJECTS") is { Length: > 0 } configured
-            ? Path.GetFullPath(configured)
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "RoughCut");
+    /// Where projects are written when nobody says otherwise; the shared default, so a second interface and
+    /// an agent put edits in the same place this window does.
+    public static string ProjectsRoot => ProjectFolder.Root;
 
     public static ToolSettings Tools => ToolSettings.Default;
 
@@ -280,9 +278,10 @@ public sealed class DesktopReviewSession
     public async Task<string> ExportAsync(string formatName, IProgress<double>? progress = null,
         CancellationToken token = default)
     {
-        var copy = formatName.StartsWith("original-", StringComparison.Ordinal);
-        var container = formatName == "original-mp4" ? "mp4" : "mkv";
-        var target = copy ? null : DeliveryTarget.Parse(formatName);
+        var choice = ExportFormats.Resolve(formatName);
+        var copy = choice.Copy;
+        var container = choice.Container;
+        var target = choice.Target;
         var destination = UnusedDirectory(Path.GetDirectoryName(ProjectPath)!,
             Path.GetFileNameWithoutExtension(ProjectPath) + "-export");
         DeliveryStatus = copy
