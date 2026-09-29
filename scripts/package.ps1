@@ -1,13 +1,16 @@
-# Produces the two things people install: the MCP server an agent host launches, and the desktop window a
-# person opens. Both come from the same shared library, so they are published together and stamped with the
-# same version — an agent and a person editing the same project must agree about what a project means.
+# Produces the three things people install: the command line, the MCP server an agent host launches, and the
+# desktop window a person opens. All three come from the same shared library, so they are published together
+# and stamped with the same version — an agent and a person editing the same project must agree about what a
+# project means.
 #
-#   .\scripts\package.ps1                 both, framework-dependent (needs .NET 10 on the machine)
-#   .\scripts\package.ps1 -SelfContained  both, carrying their own runtime (nothing to install)
+#   .\scripts\package.ps1                 all three, framework-dependent (needs .NET 10 on the machine)
+#   .\scripts\package.ps1 -SelfContained  all three, carrying their own runtime (nothing to install)
 #   .\scripts\package.ps1 -Only mcp       just the server
+#   .\scripts\package.ps1 -Archive        zip each one, with a checksum per archive
 param(
-    [ValidateSet('both', 'mcp', 'desktop')][string]$Only = 'both',
+    [ValidateSet('all', 'cli', 'mcp', 'desktop')][string]$Only = 'all',
     [switch]$SelfContained,
+    [switch]$Archive,
     [string]$Runtime = 'win-x64',
     [string]$Version
 )
@@ -27,8 +30,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed; a dependency changed without its lock file.' }
 
     $targets = @()
-    if ($Only -in @('both', 'mcp')) { $targets += @{ Project = 'src/RoughCut.Mcp'; Name = 'roughcut-mcp' } }
-    if ($Only -in @('both', 'desktop')) { $targets += @{ Project = 'src/RoughCut.Desktop'; Name = 'roughcut-desktop' } }
+    if ($Only -in @('all', 'cli')) { $targets += @{ Project = 'src/RoughCut.Cli'; Name = 'roughcut-cli' } }
+    if ($Only -in @('all', 'mcp')) { $targets += @{ Project = 'src/RoughCut.Mcp'; Name = 'roughcut-mcp' } }
+    if ($Only -in @('all', 'desktop')) { $targets += @{ Project = 'src/RoughCut.Desktop'; Name = 'roughcut-desktop' } }
 
     foreach ($target in $targets) {
         $output = Join-Path $destination $target.Name
@@ -39,21 +43,39 @@ try {
         else { $arguments += @('--self-contained', 'false') }
         & dotnet publish @arguments
         if ($LASTEXITCODE -ne 0) { throw "Publishing $($target.Name) failed." }
+
+        # Symbols are for diagnosing a build, not for installing one; they are not release assets.
+        Get-ChildItem $output -Recurse -File -Filter '*.pdb' | Remove-Item -Force
     }
 
-    # A checksum per artefact, so what was verified here can be recognised elsewhere.
+    if ($Archive) {
+        foreach ($target in $targets) {
+            $folder = Join-Path $destination $target.Name
+            if (-not (Test-Path $folder)) { continue }
+            $archivePath = Join-Path $destination "$($target.Name)-$Version-$($Runtime).zip"
+            if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+            Compress-Archive -Path (Join-Path $folder '*') -DestinationPath $archivePath -CompressionLevel Optimal
+        }
+    }
+
+    # A checksum per artefact, so what was verified here can be recognised elsewhere. Archives are listed
+    # first: they are what a person downloads, and the executable hashes below describe what is inside them.
     $manifest = Join-Path $destination 'checksums.txt'
-    Get-ChildItem $destination -Recurse -File -Include '*.exe', '*.dll' |
+    $lines = @()
+    $lines += Get-ChildItem $destination -File -Filter '*.zip' | ForEach-Object {
+        "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+    }
+    $lines += Get-ChildItem $destination -Recurse -File -Include '*.exe', '*.dll' |
         Where-Object { $_.Name -like 'roughcut*' } |
         ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.FullName.Substring($destination.Length + 1))"
-        } | Set-Content $manifest -Encoding utf8
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.FullName.Substring($destination.Length + 1))"
+        }
+    $lines | Set-Content $manifest -Encoding utf8
 
     Write-Host ''
     Write-Host "RoughCut $Version packaged into $destination"
     foreach ($target in $targets) {
-        $exe = Join-Path (Join-Path $destination $target.Name) "$($target.Name).exe"
+        $exe = Join-Path (Join-Path $destination $target.Name) "$(if ($target.Name -eq 'roughcut-cli') { 'roughcut' } else { $target.Name }).exe"
         if (Test-Path $exe) {
             $size = [math]::Round((Get-ChildItem (Split-Path $exe) -Recurse -File |
                 Measure-Object -Property Length -Sum).Sum / 1MB, 1)
