@@ -680,6 +680,31 @@ internal static class DesktopTests
                 string.Join("; ", overflowing.Take(6)));
         });
 
+        // CupriFace ignores a property or an element it does not implement rather than throwing, so a
+        // mistake in the markup reads exactly like a layout nobody finished: nothing logs, the box is
+        // just empty. The doctor turns that silence into a list. It runs over the populated review
+        // surface because that is the state with real rows in every repeat - the empty launcher model
+        // cannot exercise the checks that need content. Info findings are advisory and do not fail here.
+        await check("The review document passes CupriFace's own diagnostics", async () =>
+        {
+            var projectPath = Path.Combine(root, "desktop-timeline-project.json");
+            var session = await RoughCut.Desktop.DesktopReviewSession.LoadAsync(projectPath);
+            await session.InitializePreviewAsync();
+            var playback = new RoughCut.Desktop.DesktopPlaybackController();
+            var app = new RoughCut.Desktop.RoughCutReviewApp(session);
+            using var document = app.CreateDocument();
+            document.Refresh();
+
+            var report = CupriFace.Diagnostics.CupriDoctor.Check(app.Html, app.Css, app.Components,
+                app.Width, app.Height, app.Model, doc => doc.UseVideo(playback));
+            var serious = report.Findings
+                .Where(finding => finding.Severity != CupriFace.Diagnostics.Severity.Info)
+                .Select(finding => finding.ToString())
+                .ToArray();
+            Assert(serious.Length == 0,
+                "CupriFace diagnostics on the review document: " + string.Join("; ", serious));
+        });
+
         await check("Timeline playback approximates cuts and reordering over one source copy", () =>
         {
             // Output order [1s,2s) then [3s,4s): a removed middle and a source that plays out of order.

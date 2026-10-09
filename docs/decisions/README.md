@@ -28,5 +28,6 @@
 | [0024](0024-overlapping-transcription-windows.md) | 2026-09-27 | Accepted for local transcription | Each chunk hears three seconds of what precedes it and discards what it reports there, so a boundary stops inventing speech; amends 0006 and 0007 |
 | [0025](0025-one-edit-one-folder.md) | 2026-09-27 | Accepted for the desktop and MCP project-creation paths | One edit is one directory holding its media, project file and assets; a local video is copied in, never moved |
 | [0026](0026-the-window-needs-no-agent.md) | 2026-09-27 | Accepted for the desktop review window | The window picks the rendition, names the folder, shows real progress from the tools, offers every export format with a copy as the default, and follows an outside edit |
+| [0027](0027-cupriface-from-the-feed.md) | 2026-10-09 | Accepted for the desktop review window | CupriFace 0.41.0 restored from its GitHub Packages feed instead of vendored at 0.26.1, with the window's markup gated on `CupriDoctor`; supersedes the vendoring element of 0014 |
 
 Add numbered records with context, decision, status, consequences, evidence and review trigger. Supersede previous decisions rather than silently rewriting history. Product proposals in the brief are not accepted decisions.

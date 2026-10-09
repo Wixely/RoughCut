@@ -4,9 +4,9 @@
     "net10.0": {
       "CupriFace": {
         "type": "Direct",
-        "requested": "[0.26.1, 0.26.1]",
-        "resolved": "0.26.1",
-        "contentHash": "caa/meKMXQrr2fuZR6WaAmFrpmvoJDWlg+/iFVFmdBa3C4C0LOBeNgnIb1IZLc100JqOXXCV7dFItpLQIFW6VQ==",
+        "requested": "[0.41.0, 0.41.0]",
+        "resolved": "0.41.0",
+        "contentHash": "0mgeqWFnurPkQWxk/FyhvXwdNldVcssrKRyJCGzwz3LYH9JbIVHw+iCZj+fYBNF2l5TEj5wMPPdNk09G9Kd8aw==",
         "dependencies": {
           "AngleSharp": "1.7.0",
           "HarfBuzzSharp.NativeAssets.Linux": "8.3.0.1",
@@ -21,21 +21,21 @@
       },
       "CupriFace.Media": {
         "type": "Direct",
-        "requested": "[0.26.1, 0.26.1]",
-        "resolved": "0.26.1",
-        "contentHash": "1jFPSsX0GsBSj0IFXFG+kDtre1app7OBnjwZzCxQQ+3pUm2z5iDO+MfSgkJ17B+4mQ4qet+PQYI+E7PVAP93xw==",
+        "requested": "[0.41.0, 0.41.0]",
+        "resolved": "0.41.0",
+        "contentHash": "2/lpIYeQ634NrVnhxL9Cfz/C8ZaQLU2LEouHzKEqmbyLVsTa4IgE86Jq4526iImkTX1sz2UngVxo0WzYFcTRZQ==",
         "dependencies": {
-          "CupriFace": "0.26.1",
+          "CupriFace": "0.41.0",
           "Silk.NET.SDL": "2.22.0"
         }
       },
       "CupriFace.Shell": {
         "type": "Direct",
-        "requested": "[0.26.1, 0.26.1]",
-        "resolved": "0.26.1",
-        "contentHash": "XUXLOFtebjDWEaEmq85je3EG0RG2ajRLehjnwNvLh4cRS0yc1PsNls16k4mIYt/gjomBrmRqRCx+eKNloIyjrw==",
+        "requested": "[0.41.0, 0.41.0]",
+        "resolved": "0.41.0",
+        "contentHash": "WmVsfupKbH94U137s1BgHT5Nt3YLT38e10mgTcpqzdhzEY5nXInyu3kI2GcLTMYdig+RtAQNNnKAQTfqv63QMQ==",
         "dependencies": {
-          "CupriFace": "0.26.1",
+          "CupriFace": "0.41.0",
           "HarfBuzzSharp.NativeAssets.Linux": "8.3.0.1",
           "HarfBuzzSharp.NativeAssets.Win32": "8.3.0.1",
           "HarfBuzzSharp.NativeAssets.macOS": "8.3.0.1",
@@ -252,11 +252,11 @@
     "net10.0/linux-x64": {
       "CupriFace.Media": {
         "type": "Direct",
-        "requested": "[0.26.1, 0.26.1]",
-        "resolved": "0.26.1",
-        "contentHash": "1jFPSsX0GsBSj0IFXFG+kDtre1app7OBnjwZzCxQQ+3pUm2z5iDO+MfSgkJ17B+4mQ4qet+PQYI+E7PVAP93xw==",
+        "requested": "[0.41.0, 0.41.0]",
+        "resolved": "0.41.0",
+        "contentHash": "2/lpIYeQ634NrVnhxL9Cfz/C8ZaQLU2LEouHzKEqmbyLVsTa4IgE86Jq4526iImkTX1sz2UngVxo0WzYFcTRZQ==",
         "dependencies": {
-          "CupriFace": "0.26.1",
+          "CupriFace": "0.41.0",
           "Silk.NET.SDL": "2.22.0"
         }
       },
@@ -304,11 +304,11 @@
     "net10.0/win-x64": {
       "CupriFace.Media": {
         "type": "Direct",
-        "requested": "[0.26.1, 0.26.1]",
-        "resolved": "0.26.1",
-        "contentHash": "1jFPSsX0GsBSj0IFXFG+kDtre1app7OBnjwZzCxQQ+3pUm2z5iDO+MfSgkJ17B+4mQ4qet+PQYI+E7PVAP93xw==",
+        "requested": "[0.41.0, 0.41.0]",
+        "resolved": "0.41.0",
+        "contentHash": "2/lpIYeQ634NrVnhxL9Cfz/C8ZaQLU2LEouHzKEqmbyLVsTa4IgE86Jq4526iImkTX1sz2UngVxo0WzYFcTRZQ==",
         "dependencies": {
-          "CupriFace": "0.26.1",
+          "CupriFace": "0.41.0",
           "Silk.NET.SDL": "2.22.0"
         }
       },

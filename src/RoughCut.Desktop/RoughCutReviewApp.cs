@@ -1380,7 +1380,7 @@ public sealed class RoughCutReviewApp : CupriApp
         .launcher-title { font-size:17px; font-weight:bold; }
         .launcher-hint { color:var(--muted); font-size:12px; margin:6px 0 10px; }
         .recent-empty { color:var(--muted); font-size:12px; padding:8px 0; }
-        .recent-list { flex:1; min-height:0; overflow-y:auto; }
+        .recent-list { flex:1; min-height:0; overflow:auto; }
         .recent-open { display:flex; flex-direction:column; gap:2px; width:100%; box-sizing:border-box; margin-bottom:6px; padding:9px 11px; border:0; border-left:3px solid var(--accent); border-radius:7px; background:var(--panel2); text-align:left; cursor:pointer; }
         .recent-open:hover { background:#263249; }
         .recent-open span,.recent-open small { color:var(--muted); font-size:10px; }
@@ -1438,7 +1438,7 @@ public sealed class RoughCutReviewApp : CupriApp
         .clip span,.clip small { color:var(--muted); font-size:10px; }
         .evidence-card { max-height:150px; overflow:hidden; padding-bottom:8px; } .empty { color:var(--muted); font-size:11px; padding:0 14px 8px; }
         /* Rows are full width inside padded scroll areas, so they must include their own padding. */
-        button { color:inherit; font:inherit; } .evidence-row,.speaker-row,.speech-row { width:100%; box-sizing:border-box; border:0; text-align:left; cursor:pointer; }
+        button { color:inherit; } .evidence-row,.speaker-row,.speech-row { width:100%; box-sizing:border-box; border:0; text-align:left; cursor:pointer; }
         .evidence-row { display:flex; gap:8px; padding:7px 14px; background:transparent; } .decision { color:var(--accent); font-weight:bold; text-transform:uppercase; font-size:10px; }
         .review-panel { min-height:0; display:flex; flex-direction:column; overflow:hidden; }
         .clip-editor.hidden { display:none; }
@@ -1464,7 +1464,7 @@ public sealed class RoughCutReviewApp : CupriApp
         .rename { display:grid; gap:6px; justify-items:end; padding:10px 14px 14px; border-bottom:1px solid var(--line); }
         .rename cupri-textfield { box-sizing:border-box; min-width:0; width:350px; }
         .transcript-title { padding-top:14px; } .truncation { color:var(--accent); font-size:10px; padding:0 14px 6px; }
-        .transcript { flex:1; min-height:0; overflow-y:auto; padding:0 7px 10px; }
+        .transcript { flex:1; min-height:0; overflow:auto; padding:0 7px 10px; }
         .speech-row { padding:10px; margin-bottom:5px; border-radius:7px; background:transparent; }
         .speech-head { display:flex; gap:8px; align-items:center; font-size:10px; color:var(--muted); } .speech-head strong { color:var(--accent); } .speech-head small { margin-left:auto; }
         .speech-row p { margin:5px 0 0; line-height:1.35; font-size:13px; color:var(--text); }

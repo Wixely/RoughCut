@@ -29,7 +29,7 @@ The older behaviour, a project written beside the video, remains available throu
 
 The drop target and the path field accept either kind: a `.json` path opens an existing project, and anything else is treated as the video for a new one. That keeps creation available where no native picker exists.
 
-**Open a project…** opens the real operating-system file picker. CupriFace 0.26.1 has no dialog of its own and its shell ships SDL2, which predates `SDL_ShowOpenFileDialog`, so RoughCut calls the platform directly: `GetOpenFileNameW` from `comdlg32.dll` on Windows, and `zenity` or `kdialog` on Linux. The dialog runs on its own single-threaded-apartment thread, so the window keeps painting while it is open, and it is owned by the RoughCut window so it stays in front. Both buttons are hidden when no picker is available, leaving drop and the path field. `GetOpenFileName` moves the process working directory as the person browses — `OFN_NOCHANGEDIR` is documented as ineffective for it — so RoughCut restores the working directory when the dialog closes; every workspace-relative path depends on that.
+**Open a project…** opens the real operating-system file picker. CupriFace 0.41.0 has no dialog of its own and its shell ships SDL2, which predates `SDL_ShowOpenFileDialog`, so RoughCut calls the platform directly: `GetOpenFileNameW` from `comdlg32.dll` on Windows, and `zenity` or `kdialog` on Linux. The dialog runs on its own single-threaded-apartment thread, so the window keeps painting while it is open, and it is owned by the RoughCut window so it stays in front. Both buttons are hidden when no picker is available, leaving drop and the path field. `GetOpenFileName` moves the process working directory as the person browses — `OFN_NOCHANGEDIR` is documented as ineffective for it — so RoughCut restores the working directory when the dialog closes; every workspace-relative path depends on that.
 
 `roughcut-desktop snapshot --url <url> <out.png>` renders the picker holding a real source's renditions. It is the only way the picker's layout is checked without a device: this shell dispatches pointer events to RoughCut's own drag regions, but not to the shell's buttons, so no headless check can press **Fetch** itself.
 
@@ -41,7 +41,7 @@ The launcher list is per-user window state, not project data. It is stored outsi
 
 ## Reviewing
 
-The RC-06 Windows desktop review surface uses CupriFace 0.26.1. It reads the same portable JSON project as the CLI and MCP host. Selecting a transcript or editorial-evidence row resolves that source time through the current timeline revision, asks the shared application layer for the exact rendered PNG, seeks the playback proxy to the resolved timeline time, and displays its source/timeline timing and active crop description.
+The RC-06 Windows desktop review surface uses CupriFace 0.41.0. It reads the same portable JSON project as the CLI and MCP host. Selecting a transcript or editorial-evidence row resolves that source time through the current timeline revision, asks the shared application layer for the exact rendered PNG, seeks the playback proxy to the resolved timeline time, and displays its source/timeline timing and active crop description.
 
 ### Preview playback
 
@@ -110,6 +110,6 @@ The output path must not exist. FFmpeg and FFprobe must be available through the
 
 Windows headless rendering, dummy-device A/V timing and a framework-dependent Windows x64 publish have executed. The two-second published probe decoded 20 frames with 0.0 ms measured drift growth and zero underruns. An interactive window run has now happened: the window opened its launcher, opened an acquired AV1/Opus project and played the approximated preview, recorded in the [interactive window evidence](evidence/2026-09-21-interactive-window.md). Audio output was not assessed, so physical audio-device acceptance and A/V sync remain unverified, and Linux execution has not happened.
 
-CupriFace and CupriFace.Shell release packages are stored under `vendor/nuget` with hashes and provenance. They are MIT-licensed public release artifacts. RoughCut does not redistribute CupriFace native media codecs in this slice; preview pixels come from the already validated RoughCut FFmpeg path.
+The CupriFace packages are restored from the Wixely GitHub Packages feed, which is where they are published; they are not on nuget.org. They are MIT-licensed release artifacts. RoughCut does not redistribute CupriFace native media codecs in this slice; preview pixels come from the already validated RoughCut FFmpeg path.
 
 Next owner/action: **Implementation agent: exercise the launcher and review window on a physical device — live pointer editing, audio-device playback and Linux execution — and measure representative speaker/overlap quality when fixtures arrive.**

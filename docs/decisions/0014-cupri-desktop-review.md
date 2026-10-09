@@ -1,8 +1,8 @@
 # 0014: Use CupriFace for the initial desktop review surface
 
 - Date: 2026-09-19
-- Status: Accepted for initial Windows review slice
-- Review: CupriFace upgrade, live playback adoption, or Linux acceptance
+- Status: Accepted for initial Windows review slice; its vendoring and its 0.26.1 pin are superseded by [0027](0027-cupriface-from-the-feed.md)
+- Review: Live playback adoption or Linux acceptance; the CupriFace upgrade trigger was answered by 0027
 
 ## Context
 

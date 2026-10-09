@@ -28,13 +28,13 @@ A lock file is per framework **and runtime identifier**, which matters the momen
 
 Nine direct references, resolving to 76 packages in total. Every one carries a permissive licence, which the report asserts: MIT for 45, Apache-2.0 for 27, Zlib for 2, and two whose MIT terms arrive as a licence file rather than an expression.
 
-One of them, `DnaX.MCPFab`, comes from an authenticated feed rather than nuget.org: it is the host every server in this MCP estate shares, and only the MCP server project references it. Everything else resolves publicly, so a contributor without those credentials can still restore, build and run the libraries, the command line and the desktop window. See [packaging](packaging.md#the-estates-shared-host).
+Two of them come from an authenticated feed rather than nuget.org: `DnaX.MCPFab`, the host every server in this MCP estate shares, and the CupriFace packages behind the desktop window, which are published to GitHub Packages and not to nuget.org. Everything else resolves publicly, so a contributor without those credentials can still restore, build and run the libraries and the command line. See [packaging](packaging.md#the-estates-shared-host).
 
 | Direct package | Version | Licence | Used for |
 | --- | --- | --- | --- |
-| `CupriFace` | 0.26.1 | MIT | The desktop review window's HTML/CSS engine |
-| `CupriFace.Media` | 0.26.1 | MIT | VP9/Opus playback in that window |
-| `CupriFace.Shell` | 0.26.1 | MIT | The desktop window, input and cursors |
+| `CupriFace` | 0.41.0 | MIT | The desktop review window's HTML/CSS engine |
+| `CupriFace.Media` | 0.41.0 | MIT | VP9/Opus playback in that window |
+| `CupriFace.Shell` | 0.41.0 | MIT | The desktop window, input and cursors |
 | `ModelContextProtocol` | 1.4.0 | Apache-2.0 | The stdio MCP host |
 | `Microsoft.Extensions.Hosting` | 10.0.9 | MIT | Hosting for that MCP process |
 | `Whisper.net` | 1.9.1 | MIT | Local transcription |
@@ -42,7 +42,7 @@ One of them, `DnaX.MCPFab`, comes from an authenticated feed rather than nuget.o
 | `org.k2fsa.sherpa.onnx` | 1.13.8 | Apache-2.0 | Local speaker diarization |
 | `AngleSharp`, `SkiaSharp`, `HarfBuzzSharp`, `Silk.NET.*`, `Microsoft.Extensions.*` | see lock files | MIT | Pulled in transitively by the above |
 
-The three CupriFace packages are **vendored** under `vendor/nuget` rather than restored from a public feed, with their SHA-256 hashes and source release recorded in [that folder's README](../vendor/nuget/README.md). The rest come from nuget.org.
+The three CupriFace packages come from the same authenticated GitHub Packages feed as the shared MCP host, because CupriFace is not published to nuget.org. Building the libraries and the command line still needs no credentials; the desktop window and the MCP server do. The rest come from nuget.org.
 
 Two packages declare their licence as a packaged file rather than an SPDX expression — `Whisper.net` and `Microsoft.DotNet.PlatformAbstractions`. Both files are the MIT licence; the report reads them and says so rather than reporting a filename.
 
