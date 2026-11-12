@@ -41,6 +41,21 @@
       "presentation": { "group": "1: App", "order": 3 }
     },
     {
+      "name": "RoughCut desktop: review current test video",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/RoughCut.Desktop/bin/Debug/net10.0/roughcut-desktop.dll",
+      "args": [
+        "review",
+        "${workspaceFolder}/artifacts/user-tests/lwSysg9o7wE/project.json",
+        "${workspaceFolder}/artifacts/user-tests/lwSysg9o7wE/source-preview.webm"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "presentation": { "group": "1: App", "order": 4 }
+    },
+    {
       "name": "RoughCut contract checks",
       "type": "coreclr",
       "request": "launch",
